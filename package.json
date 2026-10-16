@@ -1,6 +1,6 @@
 {
   "name": "@serveryyswys/opm",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "把 Operit 插件工程打成 .toolpkg 的构建器（传统 Node 开发环境，不依赖 Operit 运行时）",
   "license": "GPL-3.0-or-later",
   "author": "serveryyswys",
