@@ -22,7 +22,8 @@
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "test": "node test/run-tests.js",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "package": "node tools/package.js"
   },
   "keywords": [
     "operit",

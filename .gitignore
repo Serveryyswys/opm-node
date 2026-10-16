@@ -7,5 +7,8 @@ node_modules/
 # tsc 产物
 /dist/
 
+# 发布产物（npm run package 再生）
+/build/
+
 # 测试临时目录
 /test/.tmp/
