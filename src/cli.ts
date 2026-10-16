@@ -18,6 +18,7 @@ import { join, resolve } from 'node:path';
 import { buildProject } from './lib/build';
 import { describeVersions } from './lib/version';
 import { initProject } from './lib/init';
+import { verifyProject } from './lib/verify';
 
 function ownVersion(): string {
     try {
@@ -40,6 +41,10 @@ function usage(): string {
         '  opm build [项目目录] [--out <名字>] [--dry-run] [--no-install]',
         '      计算可达性、重写裸名、拦截不支持的依赖，压成 .toolpkg',
         '      产物放在项目目录的上一级，名为 <项目目录名>.toolpkg',
+        '',
+        '  opm verify [项目目录] [--no-install]',
+        '      出包前干跑校验：manifest 字段、入口、依赖、裸名归宿、资产齐全度、统计。',
+        '      **完全不写文件**，所以可以在 CI 里当门禁用。',
         '',
         '  opm version [项目目录]',
         '      列出版本：opm 自身、目标工程、node.operit、toolpkg manifest',
@@ -152,6 +157,40 @@ function main(argv: string[]): number {
         console.log('');
         console.log('✓ 已打包 ' + result.fileCount + ' 个文件');
         console.log('  ' + result.toolpkgPath);
+        return 0;
+    }
+
+    if (command === 'verify') {
+        const projectDir = resolve(positional[0] === undefined ? process.cwd() : positional[0]);
+        const report = verifyProject({ projectDir, install: !flags.has('no-install') });
+
+        console.log('检查项：');
+        for (const check of report.checks) {
+            console.log('  ' + (check.ok ? '✓' : '✗') + ' ' + check.name + ' —— ' + check.detail);
+        }
+        const stats = report.stats;
+        console.log('');
+        console.log('统计：');
+        console.log('  归档文件   ' + stats.archiveFiles + ' 个（其中资产 ' + stats.assets + ' 个），共 ' + stats.totalBytes + ' 字节');
+        console.log('  重写      内建 ' + stats.builtin + ' / npm 包 ' + stats.package + ' / 相对 ' + stats.relative + ' / 保持原样 ' + stats.untouched);
+        console.log('  引入的包  ' + (stats.packages.length === 0 ? '（无）' : stats.packages.join(', ')));
+        console.log('  node.operit ' + stats.nodeOperitVersion);
+        for (const note of report.notes) {
+            console.log('  · ' + note);
+        }
+        for (const warning of report.warnings) {
+            console.log('  ! ' + warning);
+        }
+        if (!report.ok) {
+            console.error('');
+            console.error('校验未通过（' + report.errors.length + ' 个问题）：');
+            for (const error of report.errors) {
+                console.error('  ✗ ' + error);
+            }
+            return 1;
+        }
+        console.log('');
+        console.log('✓ 校验通过（未写任何文件）');
         return 0;
     }
 

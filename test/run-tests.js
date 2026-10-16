@@ -232,6 +232,46 @@ ok(!badTsResult.ok, 'TS 编译失败时构建失败');
 ok(badTsResult.errors.join(' ').indexOf('tsc 编译失败') >= 0, '失败信息指明是 tsc 编译失败');
 ok(badTsResult.errors.join(' ').indexOf('TS2322') >= 0, '把编译器错误码带出来了', badTsResult.errors.join(' ').slice(0, 200));
 
+// ---------------------------------------------------------------- 资产保留
+
+// resources / i18n / modules 不在 require 链里，必须原样带上；
+// i18n 里的 .js 是数据不是模块，不能被"不可达 JS 裁剪"吃掉。
+var assetProject = makeProject('assets', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.example.assets', version: '0.1.0', main: 'main.js' }),
+    'main.js': "module.exports = 1;\n",
+    'resources/logo.svg': '<svg></svg>\n',
+    'resources/pc_agent/agent.zip': 'PK fake',
+    'i18n/zh-CN.js': "exports.hello = '你好';\n",
+    'i18n/en-US.js': "exports.hello = 'hi';\n",
+    'modules/core.wasm': '\0asm',
+    'notes.md': '# notes\n',
+    'package.json': JSON.stringify({ name: 'assets', private: true }),
+    '.npmrc': 'registry=https://example.invalid/\n'
+});
+var assetResult = lib.buildProject({ projectDir: assetProject });
+ok(assetResult.ok, '带资产的工程构建成功', JSON.stringify(assetResult.errors).slice(0, 300));
+var assetNames = lib.readZip(fs.readFileSync(assetResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(assetNames.indexOf('resources/logo.svg') >= 0, 'resources/ 里的文件进包');
+ok(assetNames.indexOf('resources/pc_agent/agent.zip') >= 0, 'resources/ 的子目录也进包');
+ok(assetNames.indexOf('i18n/zh-CN.js') >= 0 && assetNames.indexOf('i18n/en-US.js') >= 0, 'i18n/*.js 作为数据整体保留（不能被可达性裁掉）');
+ok(assetNames.indexOf('modules/core.wasm') >= 0, 'modules/ 里的 wasm 进包');
+ok(assetNames.indexOf('notes.md') >= 0, '规范目录之外的非 JS 文件也带上');
+ok(assetNames.indexOf('package.json') < 0 && assetNames.indexOf('.npmrc') < 0, '工程元数据不进包');
+ok(assetResult.assets.length >= 6, 'assets 清单有 ' + assetResult.assets.length + ' 项');
+var content = lib.readZip(fs.readFileSync(assetResult.toolpkgPath)).filter(function (e) { return e.path === 'resources/logo.svg'; })[0].content.toString();
+equal(content, '<svg></svg>\n', '资产内容原样未改');
+
+// 规范目录之外的 JS 仍然按可达性裁剪
+var deadProject = makeProject('deadjs', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.example.dead', version: '0.1.0', main: 'main.js' }),
+    'main.js': 'module.exports = 1;\n',
+    'lib/dead.js': "require('vm');\n"
+});
+var deadResult = lib.buildProject({ projectDir: deadProject });
+ok(deadResult.ok, '不可达的 JS 被裁掉，不牵连构建');
+var deadNames = lib.readZip(fs.readFileSync(deadResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(deadNames.indexOf('lib/dead.js') < 0, '不可达 JS 不进包');
+
 // ---------------------------------------------------------------- init 与依赖补齐
 
 var initDir = path.join(TMP, 'initme');
@@ -288,6 +328,54 @@ var blockedByDeps = (function () {
 })();
 ok(!blockedByDeps.ok, '缺依赖且 --no-install 时构建失败');
 ok(blockedByDeps.errors.join(' ').indexOf('npm install') >= 0, '失败信息告诉使用者执行 npm install', blockedByDeps.errors.join(' ').slice(0, 200));
+
+// ---------------------------------------------------------------- verify
+
+var verifyTarget = path.join(TMP, 'verifyok');
+fs.mkdirSync(verifyTarget, { recursive: true });
+fs.mkdirSync(path.join(verifyTarget, 'resources'), { recursive: true });
+fs.mkdirSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist'), { recursive: true });
+fs.writeFileSync(path.join(verifyTarget, 'manifest.json'), JSON.stringify({ schema_version: 1, toolpkg_id: 'top.serveryyswys.verifyok', version: '1.0.0', main: 'main.js' }));
+fs.writeFileSync(path.join(verifyTarget, 'main.js'), "require('path');\nrequire('./lib/util');\n");
+fs.mkdirSync(path.join(verifyTarget, 'lib'), { recursive: true });
+fs.writeFileSync(path.join(verifyTarget, 'lib/util.js'), 'module.exports = 1;\n');
+fs.writeFileSync(path.join(verifyTarget, 'resources/logo.svg'), '<svg></svg>\n');
+fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/package.json'), JSON.stringify({ name: '@serveryyswys/node.operit', version: '9.9.9' }));
+fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/BUILTINS.json'), JSON.stringify({
+    package: '@serveryyswys/node.operit', distDir: 'dist', installDir: 'node_modules/@serveryyswys/node.operit',
+    builtins: { path: { subpath: 'path', status: 'ready', note: 't' } }
+}));
+fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist/path.js'), 'module.exports = {};\n');
+
+var verifyReport = lib.verifyProject({ projectDir: verifyTarget, install: false });
+ok(verifyReport.ok, 'verify 对健康工程通过', JSON.stringify(verifyReport.errors).slice(0, 300));
+ok(!fs.existsSync(path.join(TMP, 'verifyok.toolpkg')), 'verify 不写任何产物文件');
+equal(verifyReport.stats.assets, 1, 'verify 统计到 1 个资产');
+equal(verifyReport.stats.nodeOperitVersion, '9.9.9', 'verify 报出 node.operit 版本');
+ok(verifyReport.checks.every(function (c) { return c.ok; }), 'verify 所有检查项通过', JSON.stringify(verifyReport.checks.filter(function (c) { return !c.ok; })));
+
+// toolpkg_id 占位必须被拦下
+var placeholder = path.join(TMP, 'verifyph');
+fs.mkdirSync(placeholder, { recursive: true });
+fs.writeFileSync(path.join(placeholder, 'manifest.json'), JSON.stringify({ schema_version: 1, toolpkg_id: 'com.example.demo', version: '1.0.0', main: 'main.js' }));
+fs.writeFileSync(path.join(placeholder, 'main.js'), 'module.exports = 1;\n');
+var phReport = lib.verifyProject({ projectDir: placeholder, install: false });
+ok(!phReport.ok, 'verify 拦下占位 toolpkg_id');
+ok(phReport.errors.join(' ').indexOf('placeholder') >= 0 || phReport.errors.join(' ').indexOf('com.example.') >= 0, '报错指明是 toolpkg_id 占位', phReport.errors.join(' ').slice(0, 160));
+
+// 不支持的依赖也要在 verify 阶段拦下
+var vmProject = path.join(TMP, 'verifyvm');
+fs.mkdirSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/dist'), { recursive: true });
+fs.writeFileSync(path.join(vmProject, 'manifest.json'), JSON.stringify({ schema_version: 1, toolpkg_id: 'com.real.vm', version: '1.0.0', main: 'main.js' }));
+fs.writeFileSync(path.join(vmProject, 'main.js'), "require('vm');\n");
+fs.writeFileSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/package.json'), JSON.stringify({ name: '@serveryyswys/node.operit', version: '9.9.9' }));
+fs.writeFileSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/BUILTINS.json'), JSON.stringify({
+    package: '@serveryyswys/node.operit', distDir: 'dist', installDir: 'node_modules/@serveryyswys/node.operit',
+    builtins: { vm: { subpath: 'vm', status: 'unsupported', note: 'QuickJS 没有独立上下文' } }
+}));
+var vmReport = lib.verifyProject({ projectDir: vmProject, install: false });
+ok(!vmReport.ok, 'verify 拦下 unsupported 依赖');
+ok(vmReport.errors.join(' ').indexOf('独立上下文') >= 0, '把契约里的拒绝理由带出来', vmReport.errors.join(' ').slice(0, 200));
 
 // ---------------------------------------------------------------- version
 

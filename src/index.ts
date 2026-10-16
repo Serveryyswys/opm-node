@@ -7,6 +7,8 @@
 export { buildProject } from './lib/build';
 export type { BuildOptions, BuildResult } from './lib/build';
 export { describeVersions } from './lib/version';
+export { verifyProject } from './lib/verify';
+export type { VerifyReport, VerifyCheck, VerifyStats } from './lib/verify';
 export { initProject, OPM_PACKAGE } from './lib/init';
 export type { InitOptions, InitResult } from './lib/init';
 export { auditDependencies, installDependencies } from './lib/dependencies';
