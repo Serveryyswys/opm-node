@@ -152,6 +152,32 @@ ok(result.ok, 'build 成功', JSON.stringify(result.errors));
 equal(result.errors, [], 'build 无错误');
 equal(result.toolpkgPath, path.join(TMP, 'demo.toolpkg'), '产物落在项目目录的上一级');
 
+// 归档自洽性：产物里每条相对 require 的目标必须真的在归档里。
+//
+// 这条是补出来的：曾经入口注入的 dist/process.js 没被算进可达集，
+// 归档里因此少了它，产物一加载就 "Cannot resolve module"。
+// 当时的测试只验证归档内容和重写文本，从不检查"引用是否闭合"，
+// 所以完全没抓到 —— 而它影响的是每一个用户代码自己不 require process 的包。
+function danglingRequires(zipPath) {
+    var entries = lib.readZip(fs.readFileSync(zipPath));
+    var present = new Set(entries.map(function (entry) { return entry.path; }));
+    var dangling = [];
+    entries.forEach(function (entry) {
+        if (!/\.(js|cjs|mjs)$/.test(entry.path)) { return; }
+        lib.findRequires(entry.content.toString('utf8')).forEach(function (site) {
+            if (site.spec.charAt(0) !== '.') { return; }
+            var target = path.posix.normalize(path.posix.join(path.posix.dirname(entry.path), site.spec));
+            if (!present.has(target)) {
+                dangling.push(entry.path + ' -> ' + site.spec);
+            }
+        });
+    });
+    return dangling;
+}
+
+var dangling = danglingRequires(result.toolpkgPath);
+equal(dangling.length, 0, '归档内所有相对 require 都指向归档内存在的文件' + (dangling.length === 0 ? '' : ' —— ' + dangling.join('; ')));
+
 var produced = lib.readZip(fs.readFileSync(result.toolpkgPath));
 var names = produced.map(function (entry) { return entry.path; });
 ok(names.indexOf('manifest.json') >= 0, '归档含 manifest.json');
@@ -346,6 +372,9 @@ fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit
     builtins: { path: { subpath: 'path', status: 'ready', note: 't' } }
 }));
 fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist/path.js'), 'module.exports = {};\n');
+// 入口注入会 require 这两个，所以真包里一定有；fixture 也得有，否则是 fixture 不真实
+fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist/process.js'), 'module.exports = {};\n');
+fs.writeFileSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist/buffer.js'), 'module.exports = {};\n');
 
 var verifyReport = lib.verifyProject({ projectDir: verifyTarget, install: false });
 ok(verifyReport.ok, 'verify 对健康工程通过', JSON.stringify(verifyReport.errors).slice(0, 300));
@@ -373,6 +402,8 @@ fs.writeFileSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/BU
     package: '@serveryyswys/node.operit', distDir: 'dist', installDir: 'node_modules/@serveryyswys/node.operit',
     builtins: { vm: { subpath: 'vm', status: 'unsupported', note: 'QuickJS 没有独立上下文' } }
 }));
+fs.writeFileSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/dist/process.js'), 'module.exports = {};\n');
+fs.writeFileSync(path.join(vmProject, 'node_modules/@serveryyswys/node.operit/dist/buffer.js'), 'module.exports = {};\n');
 var vmReport = lib.verifyProject({ projectDir: vmProject, install: false });
 ok(!vmReport.ok, 'verify 拦下 unsupported 依赖');
 ok(vmReport.errors.join(' ').indexOf('独立上下文') >= 0, '把契约里的拒绝理由带出来', vmReport.errors.join(' ').slice(0, 200));

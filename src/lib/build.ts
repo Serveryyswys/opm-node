@@ -159,6 +159,25 @@ export function buildProject(options: BuildOptions): BuildResult {
     const env: RewriteEnv = { locate, contract, nodeOperitArchiveDir: NODE_OPERIT_DIR };
 
     const seeds = collectSeeds(manifest, errors);
+
+    // 入口要注入 process / Buffer 全局（沙盒没有这两个全局）。
+    // 关键是：**注入必须在可达性遍历之前登记**，把被注入引用的这两个文件
+    // 也当作种子。否则注入代码指向的 dist/process.js 不会进包，
+    // 产物一加载就 "Cannot resolve module ./node_modules/.../dist/process.js" ——
+    // 而且是每个用户代码自己没 require process 的包都这样。
+    const entryPath = typeof manifest.main === 'string' ? toPosix(manifest.main) : '';
+    let prelude = '';
+    if (entryPath !== '') {
+        const joined = toPosix(joinRelative(dirname(entryPath), NODE_OPERIT_DIR));
+        const relative = joined.startsWith('.') ? joined : './' + joined;
+        prelude =
+            '/* opm: Operit 沙盒没有 process / Buffer 全局，入口先挂上（见 node.operit 的 BUILTINS.json） */\n' +
+            "globalThis.process = require('" + relative + "/dist/process.js');\n" +
+            "globalThis.Buffer = require('" + relative + "/dist/buffer.js').Buffer;\n";
+        seeds.push(joined + '/dist/process.js');
+        seeds.push(joined + '/dist/buffer.js');
+    }
+
     const visited = new Set<string>();
     const rewritten = new Map<string, string>();
     const queue: string[] = [];
@@ -194,15 +213,8 @@ export function buildProject(options: BuildOptions): BuildResult {
         }
     }
 
-    // 入口注入运行时全局
-    const entryPath = typeof manifest.main === 'string' ? toPosix(manifest.main) : '';
-    if (entryPath !== '' && rewritten.has(entryPath)) {
-        const joined = toPosix(joinRelative(dirname(entryPath), NODE_OPERIT_DIR));
-        const relative = joined.startsWith('.') ? joined : './' + joined;
-        const prelude =
-            '/* opm: Operit 沙盒没有 process / Buffer 全局，入口先挂上（见 node.operit 的 BUILTINS.json） */\n' +
-            "globalThis.process = require('" + relative + "/dist/process.js');\n" +
-            "globalThis.Buffer = require('" + relative + "/dist/buffer.js').Buffer;\n";
+    // 注入正文（文件已在遍历阶段按种子收好，这里只贴前置代码）
+    if (entryPath !== '' && prelude !== '' && rewritten.has(entryPath)) {
         rewritten.set(entryPath, prelude + rewritten.get(entryPath));
         notes.push('已向入口 ' + entryPath + ' 注入 process / Buffer 全局');
     }
