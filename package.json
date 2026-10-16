@@ -1,0 +1,48 @@
+{
+  "name": "@serveryyswys/opm",
+  "version": "0.1.0",
+  "description": "把 Operit 插件工程打成 .toolpkg 的构建器（传统 Node 开发环境，不依赖 Operit 运行时）",
+  "license": "GPL-3.0-or-later",
+  "author": "serveryyswys",
+  "type": "commonjs",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "bin": {
+    "opm": "dist/cli.js"
+  },
+  "files": [
+    "dist/",
+    "README.md",
+    "LICENSE",
+    "NOTICE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "node test/run-tests.js",
+    "prepack": "npm run build"
+  },
+  "keywords": [
+    "operit",
+    "toolpkg",
+    "build",
+    "bundler",
+    "cli"
+  ],
+  "dependencies": {
+    "typescript": "latest"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Serveryyswys/opm-node.git"
+  },
+  "homepage": "https://github.com/Serveryyswys/opm-node",
+  "bugs": {
+    "url": "https://github.com/Serveryyswys/opm-node/issues"
+  }
+}

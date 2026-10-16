@@ -1,0 +1,11 @@
+node_modules/
+*.log
+.DS_Store
+.idea/
+.vscode/
+
+# tsc 产物
+/dist/
+
+# 测试临时目录
+/test/.tmp/

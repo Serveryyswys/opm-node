@@ -1,0 +1,8 @@
+# 统一 LF。
+#
+# 本包的产物要做逐字节校验（zip 条目、tarball 哈希），换行符跟着平台变会让校验结果不稳定。
+* text=auto eol=lf
+
+*.tgz binary
+*.zip binary
+*.png binary
