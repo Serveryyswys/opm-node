@@ -153,11 +153,11 @@ export function verifyProject(options: { projectDir: string; install?: boolean }
             : built.errors.length + ' 个问题（见 errors）'
     });
     checks.push({
-        name: '资产保留',
+        name: '额外文件（extra_files）',
         ok: true,
         detail: built.assets.length === 0
-            ? '工程没有非代码资产'
-            : '原样带上 ' + built.assets.length + ' 个资产'
+            ? 'manifest 没有声明 extra_files'
+            : '按 extra_files 带上 ' + built.assets.length + ' 个文件'
     });
 
     const counted: Record<string, number> = { builtin: 0, package: 0, relative: 0, untouched: 0 };

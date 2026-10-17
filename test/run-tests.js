@@ -262,6 +262,54 @@ ok(!badTsResult.ok, 'TS 编译失败时构建失败');
 ok(badTsResult.errors.join(' ').indexOf('tsc 编译失败') >= 0, '失败信息指明是 tsc 编译失败');
 ok(badTsResult.errors.join(' ').indexOf('TS2322') >= 0, '把编译器错误码带出来了', badTsResult.errors.join(' ').slice(0, 200));
 
+// ---------------------------------------------------------------- PACKINFO
+
+var packProject = makeProject('packinfo', {
+    'manifest.json': JSON.stringify({
+        schema_version: 1,
+        toolpkg_id: 'top.serveryyswys.packinfo',
+        version: '2.3.4',
+        main: 'main.js',
+        display_name: { zh: '打包信息', en: 'packinfo' },
+        description: { zh: '验证 PACKINFO 生成', en: 'check' },
+        author: ['甲', '乙'],
+        license: 'Apache-2.0',
+        packinfo: { enable: true }
+    }),
+    'main.js': "require('path');\nrequire('ms');\n",
+    'node_modules/ms/package.json': JSON.stringify({ name: 'ms', version: '2.1.3', main: 'index.js' }),
+    'node_modules/ms/index.js': 'module.exports = 1;\n'
+});
+var packResult = lib.buildProject({ projectDir: packProject, install: false });
+ok(packResult.ok, 'PACKINFO 工程构建成功', JSON.stringify(packResult.errors).slice(0, 300));
+var packZip = lib.readZip(fs.readFileSync(packResult.toolpkgPath));
+var packEntry = packZip.filter(function (e) { return e.path === 'PACKINFO'; })[0];
+ok(packEntry !== undefined, 'PACKINFO 写在归档根');
+if (packEntry !== undefined) {
+    var packText = packEntry.content.toString('utf8');
+    var packLines = packText.split('\n');
+    equal(packLines[0], 'name: 打包信息', 'PACKINFO 第一行是 name');
+    equal(packLines[1], 'description: 验证 PACKINFO 生成', 'PACKINFO 第二行是 description');
+    equal(packLines[2], 'id: top.serveryyswys.packinfo', 'PACKINFO 第三行是 id');
+    equal(packLines[3], 'version: 2.3.4', 'PACKINFO 第四行是 version');
+    equal(packLines[4], 'author: "甲, 乙"', 'PACKINFO 第五行是 author（数组用逗号连接，含逗号按 YAML 规则加引号）');
+    equal(packLines[5], 'license: Apache-2.0', 'PACKINFO 第六行是 license');
+    ok(packText.indexOf('dependencies:') >= 0, 'PACKINFO 有 dependencies');
+    ok(packText.indexOf('  - ms') >= 0, 'dependencies 含 ms');
+    ok(packText.indexOf('  - "@serveryyswys/node.operit"') >= 0, 'dependencies 含 node.operit（@ 触发 YAML 引号）');
+    ok(packText.indexOf('extra_files') < 0, 'PACKINFO 不写 extra_files');
+}
+
+// 未 enable 时不得生成
+var noPackProject = makeProject('packinfooff', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.real.nopack', version: '1.0.0', main: 'main.js', packinfo: { enable: false } }),
+    'main.js': 'module.exports = 1;\n'
+});
+var noPackResult = lib.buildProject({ projectDir: noPackProject, install: false });
+ok(noPackResult.ok, '关掉 PACKINFO 也能构建');
+var noPackNames = lib.readZip(fs.readFileSync(noPackResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(noPackNames.indexOf('PACKINFO') < 0, 'enable 不为 true 时不生成 PACKINFO');
+
 // ---------------------------------------------------------------- 动态 require
 
 // 打包器改不了动态 require，而运行时对裸名静默返回 {} —— 依赖会在业务里失效。
@@ -305,7 +353,11 @@ ok(staticResult.ok, '静态 require 仍然正常构建', JSON.stringify(staticRe
 // resources / i18n / modules 不在 require 链里，必须原样带上；
 // i18n 里的 .js 是数据不是模块，不能被"不可达 JS 裁剪"吃掉。
 var assetProject = makeProject('assets', {
-    'manifest.json': JSON.stringify({ toolpkg_id: 'com.example.assets', version: '0.1.0', main: 'main.js' }),
+    'manifest.json': JSON.stringify({
+        toolpkg_id: 'com.example.assets', version: '0.1.0', main: 'main.js',
+        // OPM 语义：只有显式列出的才进包（目录递归展开）
+        extra_files: ['resources', 'modules', 'i18n/zh-CN.js', 'i18n/en-US.js']
+    }),
     'main.js': "module.exports = 1;\n",
     'resources/logo.svg': '<svg></svg>\n',
     'resources/pc_agent/agent.zip': 'PK fake',
@@ -323,9 +375,10 @@ ok(assetNames.indexOf('resources/logo.svg') >= 0, 'resources/ 里的文件进包
 ok(assetNames.indexOf('resources/pc_agent/agent.zip') >= 0, 'resources/ 的子目录也进包');
 ok(assetNames.indexOf('i18n/zh-CN.js') >= 0 && assetNames.indexOf('i18n/en-US.js') >= 0, 'i18n/*.js 作为数据整体保留（不能被可达性裁掉）');
 ok(assetNames.indexOf('modules/core.wasm') >= 0, 'modules/ 里的 wasm 进包');
-ok(assetNames.indexOf('notes.md') >= 0, '规范目录之外的非 JS 文件也带上');
+ok(assetNames.indexOf('notes.md') < 0, '没有声明在 extra_files 里的文件不进包');
 ok(assetNames.indexOf('package.json') < 0 && assetNames.indexOf('.npmrc') < 0, '工程元数据不进包');
-ok(assetResult.assets.length >= 6, 'assets 清单有 ' + assetResult.assets.length + ' 项');
+ok(assetNames.indexOf('i18n/en-US.js') >= 0, 'extra_files 里逐个列出的文件也进包');
+ok(assetResult.assets.length >= 5, 'extra_files 展开了 ' + assetResult.assets.length + ' 个条目');
 var content = lib.readZip(fs.readFileSync(assetResult.toolpkgPath)).filter(function (e) { return e.path === 'resources/logo.svg'; })[0].content.toString();
 equal(content, '<svg></svg>\n', '资产内容原样未改');
 
@@ -403,7 +456,7 @@ var verifyTarget = path.join(TMP, 'verifyok');
 fs.mkdirSync(verifyTarget, { recursive: true });
 fs.mkdirSync(path.join(verifyTarget, 'resources'), { recursive: true });
 fs.mkdirSync(path.join(verifyTarget, 'node_modules/@serveryyswys/node.operit/dist'), { recursive: true });
-fs.writeFileSync(path.join(verifyTarget, 'manifest.json'), JSON.stringify({ schema_version: 1, toolpkg_id: 'top.serveryyswys.verifyok', version: '1.0.0', main: 'main.js' }));
+fs.writeFileSync(path.join(verifyTarget, 'manifest.json'), JSON.stringify({ schema_version: 1, toolpkg_id: 'top.serveryyswys.verifyok', version: '1.0.0', main: 'main.js', extra_files: ['resources'] }));
 fs.writeFileSync(path.join(verifyTarget, 'main.js'), "require('path');\nrequire('./lib/util');\n");
 fs.mkdirSync(path.join(verifyTarget, 'lib'), { recursive: true });
 fs.writeFileSync(path.join(verifyTarget, 'lib/util.js'), 'module.exports = 1;\n');

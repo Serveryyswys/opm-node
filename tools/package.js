@@ -75,6 +75,24 @@ function countFiles(dir) {
     return total;
 }
 
+
+/** 版本已经在注册表上就拒绝打包 —— 已发布的版本号不能被覆盖，
+ *  内容一变就必须升版本（这个错误我已经犯过两次）。 */
+function assertVersionUnpublished(name, version) {
+    var result = childProcess.spawnSync(
+        'npm view ' + name + '@' + version + ' version --cache "' + path.join(root, '..', '.npm-cache') + '"',
+        { cwd: root, encoding: 'utf8', shell: true }
+    );
+    var out = (result.stdout || '') + (result.stderr || '');
+    if (result.status === 0 && out.indexOf(version) >= 0) {
+        throw new Error('版本 ' + name + '@' + version + ' 已经在注册表上了。已发布的版本号不能复用，\n' +
+            '请先把 package.json 的 version 升上去，再重新打包。');
+    }
+    if (result.status !== 0 && out.indexOf('E404') < 0) {
+        console.log('（警告：查询注册表失败，跳过"版本是否已发布"检查）');
+    }
+}
+
 function main() {
     var sourcePkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
 
@@ -103,6 +121,7 @@ function main() {
 
     console.log('');
     console.log('== 3/4 打包 ==');
+    assertVersionUnpublished('@serveryyswys/opm', sourcePkg.version);
     run('npm pack --cache "' + path.join(root, '..', '.npm-cache') + '"', pkgDir);
     var produced = fs.readdirSync(pkgDir).filter(function (name) { return name.slice(-4) === '.tgz'; });
     if (produced.length !== 1) {

@@ -12,6 +12,7 @@
  *   6. 压成 zip，产物放项目根的上一级，名为 <项目目录名>.toolpkg。
  */
 
+import { renderPackInfo } from './packinfo';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep as path_sep } from 'node:path';
 import { createZip, ZipEntry } from './zip';
@@ -46,6 +47,10 @@ export interface BuildResult {
 }
 
 interface ToolPkgManifest {
+    /** PACKINFO 的开关与补充信息（对齐 OPM） */
+    packinfo?: Record<string, unknown>;
+    /** 显式声明要额外进包的文件或目录（目录递归）；语义对齐 OPM 的 extra_files */
+    extra_files?: string[];
     main?: unknown;
     subpackages?: unknown;
 }
@@ -219,18 +224,14 @@ export function buildProject(options: BuildOptions): BuildResult {
         notes.push('已向入口 ' + entryPath + ' 注入 process / Buffer 全局');
     }
 
-    // 非 JS 资产原样带上（resources / i18n / modules 等）
-    const reachableDiskPaths = new Set<string>();
-    for (const archivePath of rewritten.keys()) {
-        const disk = locate(archivePath);
-        if (disk !== null) {
-            reachableDiskPaths.add(disk);
-        }
-    }
-    const collected = collectAssets(projectDir, plan.outDir, reachableDiskPaths);
+    // 额外文件：只收 manifest.extra_files 里显式声明的（照 OPM 的语义）
+    const archivePathSet = new Set(rewritten.keys());
+    archivePathSet.add('manifest.json');
+    const extraFiles = Array.isArray(manifest.extra_files) ? manifest.extra_files : [];
+    const collected = collectExtraFiles(projectDir, extraFiles, archivePathSet);
     errors.push(...collected.errors);
     if (collected.assets.length > 0) {
-        notes.push('原样带上 ' + collected.assets.length + ' 个非代码资产（resources / i18n / modules 等）');
+        notes.push('按 extra_files 带上 ' + collected.assets.length + ' 个额外文件');
     }
 
     const outName = options.outName === undefined ? baseName(projectDir) : options.outName;
@@ -258,6 +259,15 @@ export function buildProject(options: BuildOptions): BuildResult {
     for (const entry of archiveEntries) {
         totalBytes += entry.content.length;
     }
+    // PACKINFO：仅在 manifest.packinfo.enable === true 时生成
+    const packinfoOptions = (manifest.packinfo === undefined ? null : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
+    const packinfoText = renderPackInfo(manifest as unknown as Record<string, unknown>, packinfoOptions, archiveEntries.map((entry) => entry.path));
+    if (packinfoText !== null) {
+        entries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
+        archiveEntries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
+        notes.push('已生成 PACKINFO（' + packinfoText.split('\n').length + ' 行）');
+    }
+
     const archive = createZip(entries);
     mkdirSync(dirname(toolpkgPath), { recursive: true });
     writeFileSync(toolpkgPath, archive);
@@ -276,31 +286,19 @@ export function buildProject(options: BuildOptions): BuildResult {
 }
 
 /**
- * 非 JS 资产的收集。
+ * 额外文件收集 —— 照 OPM 的 extra_files 语义。
  *
- * 规则：**JS 按可达性裁剪，非 JS 一律原样带上。**
+ * OPM（src/build/extrafiles.ts）只收 manifest 显式列出的路径：
+ *   - 是文件 → 收；
+ *   - 是目录 → **递归**收集其下文件（跳过 node_modules 与点目录，深度上限 10）；
+ *   - 不在列表里的一律不进归档。
  *
- * 为什么：resources / i18n / modules（WASM）这类文件是运行期数据，
- * 静态追 require 是追不到的 —— 早先只按 require 链收集，会把插件的 logo、
- * 多语言文件、WASM 模块**静默丢掉**，而且不报错。官方打包脚本本来就是整包 zip，
- * 使用者按"东西都在包里"预期；这里只裁掉死代码，不再动数据文件。
+ * 之前这里写的是"非 JS 一律原样带上"，那是错的：它会把工程里的杂项
+ * （草稿、截图、临时配置）一起打进包，包体不可控也不可解释。
+ * 现在归档内容 = require 闭包 + manifest 声明的入口 + 显式 extra_files，没有别的。
  */
-const ASSET_SKIP_DIRS = new Set(['node_modules', '.git']);
-const ASSET_SKIP_FILES = new Set([
-    // manifest 由构建流程显式加入，不能再被资产收集加一遍（否则 zip 里出现重复条目）
-    'manifest.json', 'manifest.hjson',
-    'package.json', 'package-lock.json', 'npm-shrinkwrap.json',
-    'tsconfig.json', '.npmrc', '.gitignore', '.gitattributes'
-]);
-const ARCHIVE_LIKE = /\.(tgz|zip|tar|gz)$/i;
-const SCRIPT_LIKE = /\.(js|cjs|mjs|ts|jsx|tsx|map)$/i;
-
-/**
- * 这三个目录**无条件整目录保留**，即使里面的文件是 .js。
- * 因为 i18n/*.js 是被 i18n 机制加载的**数据**，不是 require 出来的模块 ——
- * 按"JS 一律按可达性裁剪"会把多语言文件一起丢掉，正是这次要修的坑。
- */
-const ALWAYS_INCLUDE_DIRS = new Set(['resources', 'i18n', 'modules']);
+const EXTRA_SKIP_DIRS = new Set(['node_modules']);
+const EXTRA_MAX_DEPTH = 10;
 
 interface AssetEntry {
     /** 归档内路径 */
@@ -309,60 +307,77 @@ interface AssetEntry {
     disk: string;
 }
 
-function collectAssets(
+function collectExtraFiles(
     projectDir: string,
-    outDir: string | null,
-    reachableDiskPaths: Set<string>
+    extraFiles: readonly string[],
+    archivePaths: ReadonlySet<string>
 ): { assets: AssetEntry[]; errors: string[] } {
     const assets: AssetEntry[] = [];
     const errors: string[] = [];
-    const outDirPrefix = outDir === null ? null : outDir.replace(/[\\/]+$/, '') + path_sep;
+    const seen = new Set<string>();
 
-    const walk = (dir: string, prefix: string, insideAlways: boolean): void => {
+    const addFile = (archivePath: string): void => {
+        const normalized = toPosix(archivePath).replace(/^\.\//, '');
+        if (normalized === '' || seen.has(normalized) || archivePaths.has(normalized)) {
+            return; // 已在 require 闭包里，不重复
+        }
+        const disk = resolve(projectDir, normalized);
+        if (!existsSync(disk) || !statSync(disk).isFile()) {
+            return;
+        }
+        seen.add(normalized);
+        assets.push({ path: normalized, disk });
+    };
+
+    const walkDir = (relDir: string, depth: number): void => {
+        if (depth <= 0) {
+            return;
+        }
+        const absDir = resolve(projectDir, relDir);
         let entries;
         try {
-            entries = readdirSync(dir, { withFileTypes: true });
+            entries = readdirSync(absDir, { withFileTypes: true });
         } catch (error) {
-            errors.push('读取目录失败：' + dir + ' —— ' + String(error));
+            errors.push('读取目录失败：' + relDir + ' —— ' + String(error));
             return;
         }
         for (const entry of entries) {
-            const archivePath = prefix === '' ? entry.name : prefix + '/' + entry.name;
-            const disk = join(dir, entry.name);
-            const nextInsideAlways = insideAlways || (prefix === '' && ALWAYS_INCLUDE_DIRS.has(entry.name));
+            if (entry.name.startsWith('.')) {
+                continue; // 点目录/点文件不进包
+            }
+            const childRel = relDir === '' ? entry.name : relDir + '/' + entry.name;
             if (entry.isDirectory()) {
-                if (ASSET_SKIP_DIRS.has(entry.name)) {
+                if (EXTRA_SKIP_DIRS.has(entry.name)) {
                     continue;
                 }
-                if (outDirPrefix !== null && (disk + path_sep).startsWith(outDirPrefix)) {
-                    continue; // 编译产物目录：它的 JS 由可达性接管
-                }
-                walk(disk, archivePath, nextInsideAlways);
+                walkDir(childRel, depth - 1);
                 continue;
             }
-            if (prefix === '' && ASSET_SKIP_FILES.has(entry.name)) {
-                continue;
-            }
-            if (!nextInsideAlways && ARCHIVE_LIKE.test(entry.name)) {
-                continue; // 打包产物不该再进包 —— 但 resources/ 里的 zip 是合法资源，规范明确支持
-            }
-            if (reachableDiskPaths.has(disk)) {
-                continue; // 已经是可达 JS，不重复
-            }
-            // 规范目录之外：脚本类文件交给可达性裁剪（不可达的 JS 是死代码），
-            // 其它一律当数据带上。
-            if (!nextInsideAlways && SCRIPT_LIKE.test(entry.name)) {
-                continue;
-            }
-            assets.push({ path: archivePath, disk });
+            addFile(childRel);
         }
     };
 
-    walk(projectDir, '', false);
+    for (const raw of extraFiles) {
+        const rel = toPosix(String(raw)).replace(/^\.\//, '');
+        if (rel === '') {
+            continue;
+        }
+        const abs = resolve(projectDir, rel);
+        if (!existsSync(abs)) {
+            errors.push('extra_files 里声明的路径不存在：' + rel);
+            continue;
+        }
+        if (statSync(abs).isDirectory()) {
+            walkDir(rel, EXTRA_MAX_DEPTH);
+            continue;
+        }
+        addFile(rel);
+    }
+
     return { assets, errors };
 }
 
-/** 归档正文的总字节（未压缩）：重写后的 JS + 原样资产。dry-run 也要能报出来。 */
+/** 归档正文的总字节（未压缩）：重写后的 JS + 额外文件。dry-run 也要能报出来。 */
 function measureBytes(files: Map<string, string>, assets: readonly AssetEntry[]): number {
     let total = 0;
     for (const code of files.values()) {

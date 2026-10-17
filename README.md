@@ -78,17 +78,48 @@ opm help
 
 ### 哪些文件会进包
 
+规则照 OPM，**只有三类**：
+
 | 类别 | 处理 |
 | --- | --- |
 | `manifest.json` | 原样 |
-| **JS**（入口 / 子包 / UI / 依赖） | 顺 `require` 链裁剪 + 裸名重写；**不可达的 JS 是死代码，不带** |
-| `resources/` `i18n/` `modules/` | **无条件整目录保留**，即使里面是 `.js` |
-| 其它非 JS 文件 | 原样带上（运行期数据，静态追不出来） |
-| 工程元数据（`package.json`/`tsconfig.json`/`.npmrc`…）与打包产物（`*.tgz`/`*.zip`） | 不带 |
+| `main` / `subpackages[].entry` / UI 模块 | 读入、重写裸名、顺 require 链递归收集 |
+| `manifest.extra_files` 里列出的路径 | 文件直接收；目录**递归**收（跳过 `node_modules` 与点目录，深度上限 10） |
 
-> 为什么要专门列这条：这三个规范目录**不在 require 链里**。只按 require 收集会把插件的
-> logo、多语言文件、WASM 模块**静默丢掉**且不报错。`i18n/*.js` 尤其容易被"不可达 JS 裁剪"
-> 误伤 —— 它是被 i18n 机制加载的**数据**，不是 require 出来的模块。
+**不在 require 闭包里、也没写进 `extra_files` 的文件一律不进包。** 这包括工程里的
+杂项（草稿、截图、临时配置）—— 归档内容因此是可解释的：闭包 + 入口 + 显式声明。
+
+> 为什么改：早先这里是"非 JS 一律原样带上"，会把杂项一起打进包，包体不可控
+> 也无法解释。对齐 OPM 的 `extra_files` 之后，"打了什么"完全由声明决定。
+
+### PACKINFO（可选）
+
+在 manifest 里写：
+
+```json
+"packinfo": { "enable": true }
+```
+
+就会在归档根生成一个无扩展名的 `PACKINFO`（YAML），供市场审核核对：
+
+```yaml
+name: 打包信息
+description: 一句话说明
+id: top.serveryyswys.yourpkg
+version: 1.0.0
+author: "甲, 乙"
+license: Apache-2.0
+dependencies:
+  - "@serveryyswys/node.operit"
+  - ms
+```
+
+- 字段顺序固定 `name → description → id → version → author → license → dependencies`，
+  有才写、缺则跳过；
+- `dependencies` 从**归档里实际收进的** `node_modules/<pkg>/...` 反推，
+  所以因内建重写带进来的 `node.operit` 也会如实列出；
+- `enable` 不为 `true` 时不生成该文件；
+- 含 `@` / `,` / `:` 等字符的值会按 YAML 规则加双引号。
 
 ### 裸名重写的三条规则
 
