@@ -11,7 +11,7 @@
 
 import { closeSync, existsSync, openSync, readFileSync, statSync, unlinkSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, basename } from 'node:path';
 import { tmpdir } from 'node:os';
 
 export interface TypeScriptPlan {
@@ -151,20 +151,65 @@ export function compileTypeScript(projectDir: string, tsconfigPath: string): { o
     return { ok: result.status === 0, output };
 }
 
-/** 归档路径 -> 磁盘文件；按 原样 -> 产物目录 -> 逐级剥前导段 依次尝试。 */
+/**
+ * 归档路径 -> 磁盘文件。候选顺序（对齐 OPM 的 resolveLocalDisk，按 Node 的跨平台语义实现）：
+ *
+ *   ① 原样：<项目根>/<归档路径>
+ *   ② 产物目录：<outDir>/<归档路径>
+ *   ③ 逐级剥前导段后再丢进产物目录
+ *   ④ **反向剥离**：归档路径以产物目录名开头时，实体可能在源码侧
+ *      （如 dist/libs/en.js -> libs/en.js -> src/libs/en.js）。tsc 不搬运裸 .js，
+ *      所以这条是 TS 工程里资源/脚本文件唯一能被找到的路径。
+ *   ⑤ 裸名依赖：归档路径以 node_modules/ 开头时，按 Node 的解析规则**逐级向上**找
+ *      <祖先>/node_modules/...（monorepo 与子目录工程都靠这条）。
+ *
+ * 路径拼接全部走 node:path，不假设 POSIX 分隔符。
+ */
 export function createLocator(projectDir: string, outDir: string | null): (archivePath: string) => string | null {
+    const root = resolve(projectDir);
+    const artifactName = outDir === null ? null : basename(resolve(root, outDir));
+
     return (archivePath: string): string | null => {
-        const attempts: string[] = [join(projectDir, archivePath)];
+        const rel = archivePath.replace(/\\/g, '/');
+        const attempts: string[] = [join(root, rel)];
+
         if (outDir !== null) {
-            attempts.push(join(outDir, archivePath));
-            const parts = archivePath.split('/');
+            const artifactRoot = resolve(root, outDir);
+            attempts.push(join(artifactRoot, rel));
+            const parts = rel.split('/');
             for (let index = 1; index < parts.length; index += 1) {
-                attempts.push(join(outDir, parts.slice(index).join('/')));
+                attempts.push(join(artifactRoot, parts.slice(index).join('/')));
+            }
+            // ④ 反向剥离：dist/libs/en.js -> libs/en.js（源码侧）
+            if (artifactName !== null && artifactName !== '' && parts[0] === artifactName && parts.length > 1) {
+                const stripped = parts.slice(1).join('/');
+                attempts.push(join(root, stripped));
+                attempts.push(join(root, 'src', stripped));
             }
         }
+
+        // ⑤ 裸名依赖：逐级向上的 node_modules
+        if (rel.indexOf('node_modules/') === 0) {
+            let cursor = dirname(root);
+            let depth = 0;
+            while (depth < 12) {
+                attempts.push(join(cursor, rel));
+                const parent = dirname(cursor);
+                if (parent === cursor) {
+                    break;
+                }
+                cursor = parent;
+                depth += 1;
+            }
+        }
+
         for (const attempt of attempts) {
-            if (existsSync(attempt) && statSync(attempt).isFile()) {
-                return attempt;
+            try {
+                if (existsSync(attempt) && statSync(attempt).isFile()) {
+                    return attempt;
+                }
+            } catch {
+                // 单个候选不可读就跳过
             }
         }
         return null;

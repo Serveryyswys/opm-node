@@ -51,13 +51,18 @@ export interface VerifyReport {
 
 interface ToolPkgManifestShape {
     schema_version?: unknown;
+    api_version?: unknown;
     toolpkg_id?: unknown;
     version?: unknown;
     main?: unknown;
     subpackages?: unknown;
+    ui_modules?: unknown;
+    uiModules?: unknown;
+    screens?: unknown;
+    resources?: unknown;
 }
 
-function checkManifest(projectDir: string, checks: VerifyCheck[], errors: string[]): void {
+function checkManifest(projectDir: string, checks: VerifyCheck[], errors: string[], warnings: string[]): void {
     const manifestPath = join(projectDir, 'manifest.json');
     if (!existsSync(manifestPath)) {
         checks.push({ name: 'manifest 存在', ok: false, detail: manifestPath + ' 不存在' });
@@ -101,6 +106,56 @@ function checkManifest(projectDir: string, checks: VerifyCheck[], errors: string
         errors.push(...problems);
     }
 
+    // version 必须是 semver 形状（Operit 安装器按语义版本比较）
+    if (typeof manifest.version === 'string' && manifest.version.length > 0
+        && !/^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/.test(manifest.version)) {
+        // 只警告：实测 Operit 的安装器对 version 形状是宽松的，
+        // 真实的工程里就有 "0.2.0-Beta(2020)" 这种能装上的写法。
+        checks.push({ name: 'version 形状', ok: true, detail: manifest.version + '（非严格 semver，仅提示）' });
+        warnings.push('version 不是严格语义版本：' + manifest.version);
+    } else if (typeof manifest.version === 'string') {
+        checks.push({ name: 'version 形状', ok: true, detail: manifest.version });
+    }
+
+    // main 入口必须在磁盘上存在（TS 工程由编译产出）
+    if (typeof manifest.main === 'string' && manifest.main.length > 0) {
+        const mainPath = join(projectDir, manifest.main);
+        const exists = existsSync(mainPath);
+        checks.push({
+            name: 'main 入口存在',
+            ok: exists,
+            detail: exists ? manifest.main : '找不到 ' + manifest.main + '（TS 工程应先编译；或用 --skip-compile 时确认产物已存在）'
+        });
+        if (!exists) {
+            errors.push('main 入口不存在：' + manifest.main);
+        }
+    }
+
+    // ui 模块清单：manifest 里声明了的每个都要存在
+    const uiList = manifest.ui_modules !== undefined ? manifest.ui_modules
+        : (manifest.uiModules !== undefined ? manifest.uiModules : manifest.screens);
+    if (Array.isArray(uiList)) {
+        const missingUi: string[] = [];
+        for (const item of uiList) {
+            const rel = typeof item === 'string'
+                ? item
+                : (item !== null && typeof item === 'object' && typeof (item as Record<string, unknown>).entry === 'string')
+                    ? String((item as Record<string, unknown>).entry)
+                    : '';
+            if (rel !== '' && !existsSync(join(projectDir, rel))) {
+                missingUi.push(rel);
+            }
+        }
+        checks.push({
+            name: 'ui 模块清单',
+            ok: missingUi.length === 0,
+            detail: missingUi.length === 0 ? '声明的 ' + uiList.length + ' 个 ui 模块都在' : '找不到：' + missingUi.join(', ')
+        });
+        if (missingUi.length > 0) {
+            errors.push('ui 模块缺失：' + missingUi.join(', '));
+        }
+    }
+
     if (Array.isArray(manifest.subpackages)) {
         const missing: string[] = [];
         for (const item of manifest.subpackages) {
@@ -138,7 +193,7 @@ export function verifyProject(options: { projectDir: string; install?: boolean; 
     const warnings: string[] = [];
     const notes: string[] = [];
 
-    checkManifest(projectDir, checks, errors);
+    checkManifest(projectDir, checks, errors, warnings);
 
     // 干跑：与 build 同一条流水线，只是不落盘
     const built = buildProject({ projectDir, dryRun: true, install: options.install, skipCompile: options.skipCompile });

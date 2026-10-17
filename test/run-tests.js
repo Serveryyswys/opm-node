@@ -316,6 +316,47 @@ var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false 
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
 
+// ---------------------------------------------------------------- verify 的项目结构校验
+
+function verifyFixture(name, manifestObj, files) {
+    var dir = path.join(TMP, name);
+    fs.mkdirSync(path.join(dir, 'node_modules/@serveryyswys/node.operit/dist'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifestObj));
+    fs.writeFileSync(path.join(dir, 'node_modules/@serveryyswys/node.operit/package.json'), JSON.stringify({ name: '@serveryyswys/node.operit', version: '0.1.7' }));
+    fs.writeFileSync(path.join(dir, 'node_modules/@serveryyswys/node.operit/BUILTINS.json'), JSON.stringify({
+        package: '@serveryyswys/node.operit', distDir: 'dist', installDir: 'node_modules/@serveryyswys/node.operit',
+        builtins: {}
+    }));
+    fs.writeFileSync(path.join(dir, 'node_modules/@serveryyswys/node.operit/dist/process.js'), 'module.exports = {};\n');
+    fs.writeFileSync(path.join(dir, 'node_modules/@serveryyswys/node.operit/dist/buffer.js'), 'module.exports = {};\n');
+    Object.keys(files).forEach(function (rel) {
+        var full = path.join(dir, rel);
+        fs.mkdirSync(path.dirname(full), { recursive: true });
+        fs.writeFileSync(full, files[rel]);
+    });
+    return dir;
+}
+
+// main 入口不存在
+var noMainDir = verifyFixture('vnom', { schema_version: 1, toolpkg_id: 'top.real.vnom', version: '1.0.0', main: 'missing.js' }, {});
+var noMainReport = lib.verifyProject({ projectDir: noMainDir, install: false });
+ok(!noMainReport.ok, 'main 入口不存在时校验失败');
+ok(noMainReport.errors.join(' ').indexOf('main 入口不存在') >= 0, '报错指明 main 入口', noMainReport.errors.join(' ').slice(0, 160));
+
+// ui 模块清单里有缺失
+var uiDir = verifyFixture('vui', { schema_version: 1, toolpkg_id: 'top.real.vui', version: '1.0.0', main: 'main.js', ui_modules: ['ui/a.js', 'ui/b.js'] },
+    { 'main.js': 'module.exports = 1;\n', 'ui/a.js': 'module.exports = 1;\n' });
+var uiReport = lib.verifyProject({ projectDir: uiDir, install: false });
+ok(!uiReport.ok, 'ui 模块缺失时校验失败');
+ok(uiReport.errors.join(' ').indexOf('ui 模块缺失') >= 0, '报错指明 ui 模块', uiReport.errors.join(' ').slice(0, 160));
+
+// version 非严格 semver 只警告，不失败
+var verDir = verifyFixture('vver', { schema_version: 1, toolpkg_id: 'top.real.vver', version: '0.2.0-Beta(2020)', main: 'main.js' },
+    { 'main.js': 'module.exports = 1;\n' });
+var verReport = lib.verifyProject({ projectDir: verDir, install: false });
+ok(verReport.ok, '非严格 semver 不阻断校验', JSON.stringify(verReport.errors).slice(0, 160));
+ok(verReport.warnings.join(' ').indexOf('严格语义版本') >= 0, '给出 semver 警告');
+
 // ---------------------------------------------------------------- 动态 require 的前缀收集（对齐 OPM 6.8）
 
 // 有静态前缀 -> 前缀目录整目录进归档（运行时按前缀拼路径，收全才可能命中）
