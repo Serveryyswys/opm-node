@@ -298,6 +298,37 @@ var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false 
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
 
+// ---------------------------------------------------------------- OPM 对齐的参数
+
+// PACKINFO 用大写键（OPM 的键名）
+var upperProject = makeProject('packinfoupper', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.real.upper', version: '1.0.0', main: 'main.js' }),
+    'manifest.opmbuild.json': JSON.stringify({ PACKINFO: { enable: true } }),
+    'main.js': 'module.exports = 1;\n'
+});
+var upperResult = lib.buildProject({ projectDir: upperProject, install: false });
+ok(upperResult.ok, '大写 PACKINFO 键可用');
+ok(lib.readZip(fs.readFileSync(upperResult.toolpkgPath)).some(function (e) { return e.path === 'PACKINFO'; }), '大写 PACKINFO 生效');
+
+// outDir：产物落到指定目录
+var outDirProject = makeProject('outdir', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.real.outdir', version: '1.0.0', main: 'main.js' }),
+    'main.js': 'module.exports = 1;\n'
+});
+var targetDir = path.join(TMP, 'custom-out');
+var outDirResult = lib.buildProject({ projectDir: outDirProject, install: false, outDir: targetDir, outName: 'named' });
+ok(outDirResult.ok, '指定 outDir 构建成功');
+equal(outDirResult.toolpkgPath, path.join(targetDir, 'named.toolpkg'), '产物落在 outDir 且用 outName');
+
+// skipCompile：TS 工程跳过编译时不跑 tsc（用一个没装 typescript 的工程验证不会被编译拖累）
+var skipProject = makeProject('skipcompile', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.real.skip', version: '1.0.0', main: 'dist/main.js' }),
+    'tsconfig.json': JSON.stringify({ compilerOptions: { outDir: 'dist' } }),
+    'dist/main.js': 'module.exports = 1;\n'
+});
+var skipResult = lib.buildProject({ projectDir: skipProject, install: false, skipCompile: true });
+ok(skipResult.ok, 'skipCompile 跳过编译后仍能构建', JSON.stringify(skipResult.errors).slice(0, 200));
+
 // ---------------------------------------------------------------- PACKINFO
 
 var packProject = makeProject('packinfo', {

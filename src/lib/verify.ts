@@ -131,7 +131,7 @@ function readVersionOf(path: string): string {
     }
 }
 
-export function verifyProject(options: { projectDir: string; install?: boolean }): VerifyReport {
+export function verifyProject(options: { projectDir: string; install?: boolean; skipCompile?: boolean }): VerifyReport {
     const projectDir = resolve(options.projectDir);
     const checks: VerifyCheck[] = [];
     const errors: string[] = [];
@@ -141,7 +141,7 @@ export function verifyProject(options: { projectDir: string; install?: boolean }
     checkManifest(projectDir, checks, errors);
 
     // 干跑：与 build 同一条流水线，只是不落盘
-    const built = buildProject({ projectDir, dryRun: true, install: options.install });
+    const built = buildProject({ projectDir, dryRun: true, install: options.install, skipCompile: options.skipCompile });
     notes.push(...built.notes);
     errors.push(...built.errors);
 

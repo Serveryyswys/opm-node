@@ -22,6 +22,10 @@ import { compileTypeScript, createLocator, planTypeScript } from './typescript';
 import { auditDependencies, installDependencies } from './dependencies';
 
 export interface BuildOptions {
+    /** 跳过 tsc，直接用已有编译产物（对齐 OPM 的 skip_compile） */
+    skipCompile?: boolean;
+    /** 产物落盘目录（绝对路径）；默认写到项目根的上一级（对齐 OPM 的 out_dir） */
+    outDir?: string;
     projectDir: string;
     /** 产物名（不含 .toolpkg），默认取项目目录名 */
     outName?: string;
@@ -147,13 +151,17 @@ export function buildProject(options: BuildOptions): BuildResult {
     const plan = planTypeScript(projectDir);
     if (plan.isTypeScript) {
         notes.push('TS 模式，使用 ' + plan.tsconfigPath);
-        const compiled = compileTypeScript(projectDir, plan.tsconfigPath);
-        if (!compiled.ok) {
-            errors.push('tsc 编译失败：\n' + compiled.output.trim());
-            return { ok: false, toolpkgPath: '', fileCount: 0, files: [], totalBytes: 0, assets: [], diagnostics, errors, notes };
-        }
-        if (compiled.output.trim().length > 0) {
-            notes.push('tsc 输出：\n    ' + compiled.output.trim().split('\n').join('\n    '));
+        if (options.skipCompile === true) {
+            notes.push('已跳过编译（skipCompile）');
+        } else {
+            const compiled = compileTypeScript(projectDir, plan.tsconfigPath);
+            if (!compiled.ok) {
+                errors.push('tsc 编译失败：\n' + compiled.output.trim());
+                return { ok: false, toolpkgPath: '', fileCount: 0, files: [], totalBytes: 0, assets: [], diagnostics, errors, notes };
+            }
+            if (compiled.output.trim().length > 0) {
+                notes.push('tsc 输出：\n    ' + compiled.output.trim().split('\n').join('\n    '));
+            }
         }
         notes.push('编译产物目录：' + (plan.outDir === null ? '（与源码同目录）' : plan.outDir));
     } else {
@@ -238,7 +246,7 @@ export function buildProject(options: BuildOptions): BuildResult {
     }
 
     const outName = options.outName === undefined ? baseName(projectDir) : options.outName;
-    const toolpkgPath = join(dirname(projectDir), outName + '.toolpkg');
+    const toolpkgPath = join(options.outDir === undefined ? dirname(projectDir) : resolve(projectDir, options.outDir), outName + '.toolpkg');
 
     if (errors.length > 0) {
         return { ok: false, toolpkgPath, fileCount: rewritten.size, files: [...rewritten.keys()], totalBytes: 0, assets: collected.assets.map((asset) => asset.path), diagnostics, errors, notes };
@@ -263,10 +271,12 @@ export function buildProject(options: BuildOptions): BuildResult {
         totalBytes += entry.content.length;
     }
     // PACKINFO：仅在 manifest.packinfo.enable === true 时生成
-    const configPackinfo = buildConfig.packinfo as Parameters<typeof renderPackInfo>[1];
+    const configPackinfo = (buildConfig.PACKINFO !== undefined ? buildConfig.PACKINFO : buildConfig.packinfo) as Parameters<typeof renderPackInfo>[1];
     const packinfoOptions = (configPackinfo !== undefined && configPackinfo !== null
         ? configPackinfo
-        : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
+        : (manifest as unknown as Record<string, unknown>).PACKINFO !== undefined
+            ? (manifest as unknown as Record<string, unknown>).PACKINFO as Parameters<typeof renderPackInfo>[1]
+            : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
     const packinfoText = renderPackInfo(manifest as unknown as Record<string, unknown>, packinfoOptions, archiveEntries.map((entry) => entry.path));
     if (packinfoText !== null) {
         entries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
@@ -418,6 +428,8 @@ const OPM_BUILD_CONFIG = 'manifest.opmbuild.json';
 
 interface OpmBuildConfig {
     extra_files?: unknown;
+    /** OPM 的键名是大写 PACKINFO；小写 packinfo 作为兼容别名 */
+    PACKINFO?: unknown;
     packinfo?: unknown;
 }
 

@@ -38,11 +38,11 @@ function usage(): string {
         '      把工程准备到能 build：补 scripts.build 与依赖声明、生成 manifest.json 骨架、',
         '      TS 工程补 tsconfig.json；默认装依赖。',
         '',
-        '  opm build [项目目录] [--out <名字>] [--dry-run] [--no-install]',
+        '  opm build [项目目录] [--out <名字>] [--out-dir <目录>] [--skip-compile] [--dry-run] [--no-install]',
         '      计算可达性、重写裸名、拦截不支持的依赖，压成 .toolpkg',
         '      产物放在项目目录的上一级，名为 <项目目录名>.toolpkg',
         '',
-        '  opm verify [项目目录] [--no-install]',
+        '  opm verify [项目目录] [--skip-compile] [--no-install]',
         '      出包前干跑校验：manifest 字段、入口、依赖、裸名归宿、资产齐全度、统计。',
         '      **完全不写文件**，所以可以在 CI 里当门禁用。',
         '',
@@ -144,6 +144,8 @@ function main(argv: string[]): number {
         const result = buildProject({
             projectDir,
             outName: flags.get('out'),
+            outDir: flags.get('out-dir'),
+            skipCompile: flags.has('skip-compile'),
             dryRun: flags.has('dry-run'),
             install: !flags.has('no-install')
         });
@@ -171,7 +173,7 @@ function main(argv: string[]): number {
 
     if (command === 'verify') {
         const projectDir = resolve(positional[0] === undefined ? process.cwd() : positional[0]);
-        const report = verifyProject({ projectDir, install: !flags.has('no-install') });
+        const report = verifyProject({ projectDir, install: !flags.has('no-install'), skipCompile: flags.has('skip-compile') });
 
         if (flags.has('verbose')) {
             for (const check of report.checks) {

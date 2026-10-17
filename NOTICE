@@ -1,15 +1,25 @@
 @serveryyswys/opm
 Copyright 2026 serveryyswys
 
-This program is free software: you can redistribute it and/or modify
-it under the terms of the GNU General Public License as published by
-the Free Software Foundation, either version 3 of the License, or
-(at your option) any later version.
+本程序是自由软件：你可以依据自由软件基金会发布的 GNU 通用公共许可证
+（第 3 版或你选择的任何更新版本）的条款重新分发和/或修改它。
 
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
+本程序按"无任何担保"分发；甚至不包含适销性或特定用途适用性的默示担保。
+详见 GNU 通用公共许可证。
+你应当已随本程序收到一份 GNU 通用公共许可证副本；如果没有，见
+<https://www.gnu.org/licenses/>。
 
-You should have received a copy of the GNU General Public License
-along with this program.  If not, see <https://www.gnu.org/licenses/>.
+---
+
+## 第三方来源（GNU GPL v3）
+
+本包部分实现移植自 **OperitPackageManager**，该项目同样以 GNU GPL v3 发布：
+<https://github.com/yyswys-yjyj/OperitPackageManager>
+
+| 本包文件 | 来源 |
+| --- | --- |
+| `src/lib/packinfo.ts` | `src/build/packinfo.ts`（PACKINFO 的字段顺序、YAML 规则、依赖反推） |
+| `src/lib/build.ts` 的 extra_files 展开 | `src/build/extrafiles.ts`（目录递归、跳过 node_modules 与点目录、深度上限） |
+| `src/lib/build.ts` 的收集模型 | `src/build/reachability.ts`（require 闭包 + extraEntries 种子 + excludePrefixes） |
+
+如果上述项目的版权持有者认为署名方式需要调整，请提出，我会改。
