@@ -92,6 +92,25 @@ opm help
 > 为什么改：早先这里是"非 JS 一律原样带上"，会把杂项一起打进包，包体不可控
 > 也无法解释。对齐 OPM 的 `extra_files` 之后，"打了什么"完全由声明决定。
 
+### 构建清单 manifest.opmbuild.json（可选）
+
+项目根放一个 `manifest.opmbuild.json`，把**构建期**的决策与运行时 manifest 分开：
+
+```json
+{
+  "extra_files": ["resources", "i18n"],
+  "packinfo": { "enable": true }
+}
+```
+
+- `extra_files`：额外进包的路径，文件直接收，目录**递归**收（跳过 `node_modules` 与点目录）；
+- `packinfo`：是否生成 `PACKINFO`（见下）；
+- **优先级高于** `manifest.json` 里的同名字段；文件不存在就用 manifest 里的，都没有就不打额外文件；
+- 不是合法 JSON 会**明确报错**，不会静默忽略。
+
+> 为什么单独一个文件：`manifest.json` 是装上设备后给 Operit 读的**运行时**元数据，
+> 而"打哪些文件、要不要 PACKINFO"是**构建期**的事。混在一起会让运行时清单变脏。
+
 ### PACKINFO（可选）
 
 在 manifest 里写：

@@ -262,6 +262,42 @@ ok(!badTsResult.ok, 'TS 编译失败时构建失败');
 ok(badTsResult.errors.join(' ').indexOf('tsc 编译失败') >= 0, '失败信息指明是 tsc 编译失败');
 ok(badTsResult.errors.join(' ').indexOf('TS2322') >= 0, '把编译器错误码带出来了', badTsResult.errors.join(' ').slice(0, 200));
 
+// ---------------------------------------------------------------- 构建期清单
+
+// manifest.opmbuild.json 是构建期决策（打哪些额外文件 / 要不要 PACKINFO），
+// 与运行时 manifest.json 分开；优先级更高。
+var cfgProject = makeProject('opmbuildcfg', {
+    'manifest.json': JSON.stringify({
+        toolpkg_id: 'top.serveryyswys.cfg', version: '1.0.0', main: 'main.js',
+        extra_files: ['ignored.md']      // 应被构建清单覆盖
+    }),
+    'manifest.opmbuild.json': JSON.stringify({
+        extra_files: ['resources'],
+        packinfo: { enable: true }
+    }),
+    'main.js': 'module.exports = 1;\n',
+    'resources/logo.svg': '<svg></svg>\n',
+    'ignored.md': 'x\n',
+    'notes.md': 'y\n'
+});
+var cfgResult = lib.buildProject({ projectDir: cfgProject, install: false });
+ok(cfgResult.ok, '带构建清单的工程构建成功', JSON.stringify(cfgResult.errors).slice(0, 300));
+var cfgNames = lib.readZip(fs.readFileSync(cfgResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(cfgNames.indexOf('resources/logo.svg') >= 0, '构建清单里的目录被递归收起');
+ok(cfgNames.indexOf('ignored.md') < 0, 'manifest.json 的 extra_files 被构建清单覆盖');
+ok(cfgNames.indexOf('notes.md') < 0, '未声明的文件不进包');
+ok(cfgNames.indexOf('PACKINFO') >= 0, '构建清单里的 packinfo.enable 生效');
+
+// 坏 JSON 必须明确报错，不能静默忽略
+var badCfgProject = makeProject('opmbuildbad', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.real.bad', version: '1.0.0', main: 'main.js' }),
+    'manifest.opmbuild.json': '{ not json',
+    'main.js': 'module.exports = 1;\n'
+});
+var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false });
+ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
+ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
+
 // ---------------------------------------------------------------- PACKINFO
 
 var packProject = makeProject('packinfo', {

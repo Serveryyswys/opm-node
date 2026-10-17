@@ -163,6 +163,7 @@ export function buildProject(options: BuildOptions): BuildResult {
     const locate = createLocator(projectDir, plan.outDir);
     const env: RewriteEnv = { locate, contract, nodeOperitArchiveDir: NODE_OPERIT_DIR };
 
+    const buildConfig = readBuildConfig(projectDir, errors);
     const seeds = collectSeeds(manifest, errors);
 
     // 入口要注入 process / Buffer 全局（沙盒没有这两个全局）。
@@ -227,7 +228,9 @@ export function buildProject(options: BuildOptions): BuildResult {
     // 额外文件：只收 manifest.extra_files 里显式声明的（照 OPM 的语义）
     const archivePathSet = new Set(rewritten.keys());
     archivePathSet.add('manifest.json');
-    const extraFiles = Array.isArray(manifest.extra_files) ? manifest.extra_files : [];
+    const configExtra = Array.isArray(buildConfig.extra_files) ? buildConfig.extra_files as string[] : null;
+    const manifestExtra = Array.isArray(manifest.extra_files) ? manifest.extra_files : [];
+    const extraFiles = configExtra !== null ? configExtra : manifestExtra;
     const collected = collectExtraFiles(projectDir, extraFiles, archivePathSet);
     errors.push(...collected.errors);
     if (collected.assets.length > 0) {
@@ -260,7 +263,10 @@ export function buildProject(options: BuildOptions): BuildResult {
         totalBytes += entry.content.length;
     }
     // PACKINFO：仅在 manifest.packinfo.enable === true 时生成
-    const packinfoOptions = (manifest.packinfo === undefined ? null : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
+    const configPackinfo = buildConfig.packinfo as Parameters<typeof renderPackInfo>[1];
+    const packinfoOptions = (configPackinfo !== undefined && configPackinfo !== null
+        ? configPackinfo
+        : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
     const packinfoText = renderPackInfo(manifest as unknown as Record<string, unknown>, packinfoOptions, archiveEntries.map((entry) => entry.path));
     if (packinfoText !== null) {
         entries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
@@ -391,6 +397,47 @@ function measureBytes(files: Map<string, string>, assets: readonly AssetEntry[])
         }
     }
     return total;
+}
+
+/**
+ * 构建期清单（可选）：项目根的 manifest.opmbuild.json。
+ *
+ * 为什么不塞进 manifest.json：manifest.json 是**运行时**元数据（装到设备上给 Operit 读的），
+ * 而"打哪些额外文件、要不要生成 PACKINFO"是**构建期**决策，混在一起会让运行时清单变脏。
+ * 单独一个清单文件，职责清楚，也可以不提交（看团队习惯）。
+ *
+ * 形状：
+ *   {
+ *     "extra_files": ["resources", "i18n/zh-CN.js"],
+ *     "packinfo": { "enable": true }
+ *   }
+ *
+ * 兼容：manifest.json 里同名字段仍然生效（先看构建清单，再看 manifest）。
+ */
+const OPM_BUILD_CONFIG = 'manifest.opmbuild.json';
+
+interface OpmBuildConfig {
+    extra_files?: unknown;
+    packinfo?: unknown;
+}
+
+function readBuildConfig(projectDir: string, errors: string[]): OpmBuildConfig {
+    const configPath = join(projectDir, OPM_BUILD_CONFIG);
+    if (!existsSync(configPath)) {
+        return {};
+    }
+    let parsed: unknown;
+    try {
+        parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+    } catch (error) {
+        errors.push(OPM_BUILD_CONFIG + ' 不是合法 JSON：' + String(error));
+        return {};
+    }
+    if (parsed === null || typeof parsed !== 'object') {
+        errors.push(OPM_BUILD_CONFIG + ' 的顶层必须是对象');
+        return {};
+    }
+    return parsed as OpmBuildConfig;
 }
 
 function baseName(value: string): string {

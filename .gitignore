@@ -5,6 +5,9 @@ node_modules/
 .vscode/
 
 # tsc 产物
+*.bak
+*.bak2
+
 /dist/
 
 # 发布产物（npm run package 再生）
