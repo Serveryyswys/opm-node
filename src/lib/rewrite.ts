@@ -172,7 +172,17 @@ export function rewriteModule(env: RewriteEnv, archivePath: string, source: stri
     let output = source;
     for (let index = sites.length - 1; index >= 0; index -= 1) {
         const site = sites[index];
-        const spec = site.spec;
+        if (site.dynamic) {
+            // 改不了就必须说，不能默认放过：运行时对裸名静默返回 {}，
+            // 症状会是"某个依赖神秘失效"，比构建立刻失败难查得多。
+            errors.push(
+                archivePath + ' 里存在无法静态分析的 require（偏移 ' + site.start + '）。\n' +
+                '    打包器无法改写它，而 Operit 运行时对裸名会静默返回 {} —— 依赖会在业务里失效而不报错。\n' +
+                '    请改成字符串字面量（require(\'fs\')），或拆成多分支的字面量 require。'
+            );
+            continue;
+        }
+        const spec = site.spec as string;
 
         if (RUNTIME_BUILTINS.includes(spec)) {
             diagnostics.push({ file: archivePath, spec, kind: 'untouched', target: spec });

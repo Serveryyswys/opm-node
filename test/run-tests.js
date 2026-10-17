@@ -66,7 +66,11 @@ function makeProject(name, files) {
 
 // ---------------------------------------------------------------- findRequires
 
-ok(JSON.stringify(lib.findRequires("require('a')")) === JSON.stringify([{ spec: 'a', start: 9, end: 10 }]), 'findRequires 基本形态', JSON.stringify(lib.findRequires("require('a')")));
+ok(JSON.stringify(lib.findRequires("require('a')")) === JSON.stringify([{ spec: 'a', dynamic: false, start: 9, end: 10 }]), 'findRequires 基本形态', JSON.stringify(lib.findRequires("require('a')")));
+equal(lib.findRequires('require(name)').map(function (s) { return s.dynamic; }), [true], '变量实参标为动态');
+equal(lib.findRequires("require('a' + x)").map(function (s) { return s.dynamic; }), [true], "拼接实参标为动态（不能截断成 'a'）");
+equal(lib.findRequires('require(flag ? "a" : "b")').map(function (s) { return s.dynamic; }), [true], '三元实参标为动态');
+equal(lib.findRequires('require("./x")').map(function (s) { return s.dynamic; }), [false], '纯字面量不算动态');
 equal(lib.findRequires("// require('x')\n").length, 0, '行注释里的 require 不算');
 equal(lib.findRequires('/* require("x") */').length, 0, '块注释里的 require 不算');
 equal(lib.findRequires("var s = \"require('x')\";").length, 0, '字符串里的 require 不算');
@@ -257,6 +261,44 @@ var badTsResult = lib.buildProject({ projectDir: badTs });
 ok(!badTsResult.ok, 'TS 编译失败时构建失败');
 ok(badTsResult.errors.join(' ').indexOf('tsc 编译失败') >= 0, '失败信息指明是 tsc 编译失败');
 ok(badTsResult.errors.join(' ').indexOf('TS2322') >= 0, '把编译器错误码带出来了', badTsResult.errors.join(' ').slice(0, 200));
+
+// ---------------------------------------------------------------- 动态 require
+
+// 打包器改不了动态 require，而运行时对裸名静默返回 {} —— 依赖会在业务里失效。
+// 所以必须构建立刻失败，不能默认放过。
+var dynamicProject = makeProject('dynamicreq', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.real.dynamicreq', version: '1.0.0', main: 'main.js' }),
+    'main.js': "var name = 'fs';\nrequire(name);\n"
+});
+var dynamicResult = lib.buildProject({ projectDir: dynamicProject, install: false });
+ok(!dynamicResult.ok, '变量形式的 require 让构建失败');
+ok(dynamicResult.errors.join(' ').indexOf('无法静态分析') >= 0, '报错指明是动态 require', dynamicResult.errors.join(' ').slice(0, 200));
+
+// 拼接不能被截断成 'f' —— 截断比忽略更糟
+var concatProject = makeProject('concatreq', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.real.concatreq', version: '1.0.0', main: 'main.js' }),
+    'main.js': "require('f' + 's');\n"
+});
+var concatResult = lib.buildProject({ projectDir: concatProject, install: false });
+ok(!concatResult.ok, "require('f' + 's') 被判为动态（而不是截断成 f 去重写）");
+ok(concatResult.errors.join(' ').indexOf('无法静态分析') >= 0, '拼接形式的报错正确');
+
+// 模板串同样拦下
+var tplProject = makeProject('tplreq', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.real.tplreq', version: '1.0.0', main: 'main.js' }),
+    'main.js': "var n = 'x';\nrequire('./lib/' + n + '.js');\n"
+});
+var tplResult = lib.buildProject({ projectDir: tplProject, install: false });
+ok(!tplResult.ok, '模板/拼接式子路径也被拦下');
+
+// 静态的形式必须照常放行（别过度拦截）
+var staticProject = makeProject('staticreq', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'com.real.staticreq', version: '1.0.0', main: 'main.js' }),
+    'main.js': "require('path');\nrequire('./lib/a.js');\n",
+    'lib/a.js': 'module.exports = 1;\n'
+});
+var staticResult = lib.buildProject({ projectDir: staticProject, install: false });
+ok(staticResult.ok, '静态 require 仍然正常构建', JSON.stringify(staticResult.errors).slice(0, 200));
 
 // ---------------------------------------------------------------- 资产保留
 

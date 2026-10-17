@@ -11,8 +11,15 @@
  */
 
 export interface RequireSite {
-    /** require 的实参（已去引号、已解转义） */
-    spec: string;
+    /** require 的实参（已去引号、已解转义）；**动态形式为 null** */
+    spec: string | null;
+    /**
+     * 无法静态分析（变量 / 模板串 / 字符串拼接 / 三元…）。
+     *
+     * 这类 require 打包器改不了，而 Operit 运行时对裸名**静默返回 {}** ——
+     * 于是依赖在业务里神秘失效。所以必须显式报错，不能放过。
+     */
+    dynamic: boolean;
     /** spec 在源码里的起止下标（不含引号），替换时用 */
     start: number;
     end: number;
@@ -116,11 +123,27 @@ export function findRequires(source: string): RequireSite[] {
                             cursor += 1;
                         }
                         if (cursor < length) {
-                            sites.push({ spec: value, start: start, end: cursor });
+                            // 字面量后面若还跟着运算（'a' + x / 'a' ? ...），实参其实是表达式。
+                            // 以前这里会把它当成 'a' 去重写 —— 截断比忽略更糟，必须区分。
+                            let after = cursor + 1;
+                            while (after < length && /\s/.test(source[after])) {
+                                after += 1;
+                            }
+                            const trailing = source[after];
+                            const isExpression = trailing === '+' || trailing === '?' || trailing === '|' || trailing === '&';
+                            sites.push({
+                                spec: isExpression ? null : value,
+                                dynamic: isExpression,
+                                start: start,
+                                end: cursor
+                            });
                             index = cursor + 1;
                             previousMeaningful = quote;
                             continue;
                         }
+                    } else {
+                        // 实参不是字符串字面量：变量 / 模板串 / 三元 / 函数调用…全部无法静态改写
+                        sites.push({ spec: null, dynamic: true, start: cursor, end: cursor });
                     }
                 }
             }
