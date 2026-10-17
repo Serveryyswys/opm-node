@@ -193,11 +193,29 @@ ok(names.some(function (n) { return n.indexOf('node_modules/@serveryyswys/node.o
 ok(!names.some(function (n) { return n.indexOf('node_modules/@serveryyswys/node.operit/dist/vm') >= 0; }), '没被引用的 node.operit 文件不进包');
 
 var mainText = produced.filter(function (e) { return e.path === 'main.js'; })[0].content.toString();
-// 锚点必须是改写后依然存在的文本（原来的 require('path') 已被改写成路径）
-ok(mainText.indexOf('globalThis.process = require(') >= 0 &&
-   mainText.indexOf('globalThis.process = require(') < mainText.indexOf('const path ='),
-   '入口在用户代码之前注入 process 全局', mainText.slice(0, 160));
-ok(mainText.indexOf('globalThis.Buffer = require(') >= 0, '入口注入 Buffer 全局');
+// 按需注入：本 fixture 没用到 process / Buffer，所以不该注入任何东西
+ok(mainText.indexOf('__g.process') < 0 && mainText.indexOf('__g.Buffer') < 0,
+   '没用到 process / Buffer 时不注入', mainText.slice(0, 160));
+ok(!names.some(function (n) { return n.indexOf('dist/process.js') >= 0 || n.indexOf('dist/buffer.js') >= 0; }),
+   '没用到时不把 process.js / buffer.js 收进归档');
+
+// 用到了就要注入，且注入目标要进归档
+var globalsProject = makeProject('globalsused', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.globals', version: '1.0.0', main: 'main.js' }),
+    'main.js': "var u = process.env.HOME; var b = Buffer.from('x');\nexports.registerToolPkg = function () { return b.length + String(u).length; };\n"
+});
+var globalsResult = lib.buildProject({ projectDir: globalsProject, install: false });
+ok(globalsResult.ok, '用到 process/Buffer 的工程能构建', JSON.stringify(globalsResult.errors).slice(0, 200));
+var globalsZip = lib.readZip(fs.readFileSync(globalsResult.toolpkgPath));
+var globalsMain = globalsZip.filter(function (e) { return e.path === 'main.js'; })[0].content.toString();
+ok(globalsMain.indexOf('__g.process') >= 0, '用到 process 时注入');
+ok(globalsMain.indexOf('__g.Buffer') >= 0, '用到 Buffer 时注入');
+ok(globalsMain.indexOf('__g.process') < globalsMain.indexOf('var u = process.env.HOME'),
+   '注入在用户代码之前', globalsMain.slice(0, 200));
+var globalsNames = globalsZip.map(function (e) { return e.path; });
+ok(globalsNames.indexOf('node_modules/@serveryyswys/node.operit/dist/process.js') >= 0, 'process.js 进归档且路径根相对');
+ok(globalsNames.indexOf('node_modules/@serveryyswys/node.operit/dist/buffer.js') >= 0, 'buffer.js 进归档');
+ok(!globalsNames.some(function (n) { return n.indexOf('..') >= 0; }), '归档内没有 .. 路径');
 ok(mainText.indexOf("require('./node_modules/@serveryyswys/node.operit/dist/path.js')") >= 0, '内建已重写');
 ok(mainText.indexOf("require('axios')") >= 0, '运行时内建保持原样');
 
@@ -297,6 +315,33 @@ var badCfgProject = makeProject('opmbuildbad', {
 var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false });
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
+
+// ---------------------------------------------------------------- 构建期清单全参数
+
+// OPM 的 build 有 6 个参数；配置清单要能覆盖除 project_dir 以外的全部
+var cfgFullProject = makeProject('cfgfull', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.cfgfull', version: '1.0.0', main: 'main.js' }),
+    'manifest.opmbuild.json': JSON.stringify({
+        skip_compile: true,
+        out_name: 'from-config',
+        out_dir: 'out-from-config',
+        extra_files: ['resources'],
+        PACKINFO: { enable: true }
+    }),
+    'main.js': 'module.exports = 1;\n',
+    'resources/logo.svg': '<svg/>\n'
+});
+var cfgFullResult = lib.buildProject({ projectDir: cfgFullProject, install: false });
+ok(cfgFullResult.ok, '全参数配置能构建', JSON.stringify(cfgFullResult.errors).slice(0, 300));
+ok(cfgFullResult.toolpkgPath.indexOf('from-config.toolpkg') >= 0, 'out_name 生效', cfgFullResult.toolpkgPath);
+ok(cfgFullResult.toolpkgPath.indexOf('out-from-config') >= 0, 'out_dir 生效', cfgFullResult.toolpkgPath);
+var cfgFullNames = lib.readZip(fs.readFileSync(cfgFullResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(cfgFullNames.indexOf('resources/logo.svg') >= 0, 'extra_files 生效');
+ok(cfgFullNames.indexOf('PACKINFO') >= 0, 'PACKINFO 生效');
+
+// 显式传参优先于配置清单
+var cfgOverride = lib.buildProject({ projectDir: cfgFullProject, install: false, outName: 'cli-wins' });
+ok(cfgOverride.toolpkgPath.indexOf('cli-wins') >= 0, '显式 outName 覆盖配置清单', cfgOverride.toolpkgPath);
 
 // ---------------------------------------------------------------- 跨平台
 

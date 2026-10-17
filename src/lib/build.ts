@@ -124,6 +124,16 @@ export function buildProject(options: BuildOptions): BuildResult {
         return { ok: false, toolpkgPath: '', fileCount: 0, files: [], totalBytes: 0, assets: [], diagnostics, errors, notes };
     }
 
+    // 构建期配置（manifest.opmbuild.json）：参数优先级 = 显式传参 > 配置文件 > manifest.json
+    const buildConfig = readBuildConfig(projectDir, errors);
+    const optionSkipCompile = options.skipCompile === true || buildConfig.skip_compile === true;
+    const optionOutName = options.outName !== undefined
+        ? options.outName
+        : (typeof buildConfig.out_name === 'string' ? buildConfig.out_name : undefined);
+    const optionOutDir = options.outDir !== undefined
+        ? options.outDir
+        : (typeof buildConfig.out_dir === 'string' ? buildConfig.out_dir : undefined);
+
     // 依赖补齐：重写器是在 node_modules 里找包的，依赖没装齐就会以"解析不到"收场，
     // 那个报错对使用者没有指导性，而一条 npm install 就能解决。所以先补齐再解析。
     // 不指定 registry —— 包从哪来由使用者自己的 npm 配置决定。
@@ -167,7 +177,7 @@ export function buildProject(options: BuildOptions): BuildResult {
     const plan = planTypeScript(projectDir);
     if (plan.isTypeScript) {
         notes.push('TS 模式，使用 ' + plan.tsconfigPath);
-        if (options.skipCompile === true) {
+        if (optionSkipCompile) {
             notes.push('已跳过编译（skipCompile）');
         } else {
             const compiled = compileTypeScript(projectDir, plan.tsconfigPath);
@@ -187,7 +197,7 @@ export function buildProject(options: BuildOptions): BuildResult {
     const locate = createLocator(projectDir, plan.outDir);
     const env: RewriteEnv = { locate, contract, nodeOperitArchiveDir: NODE_OPERIT_DIR };
 
-    const buildConfig = readBuildConfig(projectDir, errors);
+
     const seeds = collectSeeds(manifest, errors);
 
     // 入口要注入 process / Buffer 全局（沙盒没有这两个全局）。
@@ -204,10 +214,7 @@ export function buildProject(options: BuildOptions): BuildResult {
             '/* opm: Operit 沙盒没有 process / Buffer 全局，入口先挂上（见 node.operit 的 BUILTINS.json） */\n' +
             "globalThis.process = require('" + relative + "/dist/process.js');\n" +
             "globalThis.Buffer = require('" + relative + "/dist/buffer.js').Buffer;\n";
-        // joined 是**require 用的相对写法**（可能是 ../node_modules/...），
-        // 但归档内路径必须根相对 —— 这里解析掉 .. 再入种子。
-        seeds.push(normalizeArchivePath(joined + '/dist/process.js'));
-        seeds.push(normalizeArchivePath(joined + '/dist/buffer.js'));
+
     }
 
     const visited = new Set<string>();
@@ -245,10 +252,73 @@ export function buildProject(options: BuildOptions): BuildResult {
         }
     }
 
-    // 注入正文（文件已在遍历阶段按种子收好，这里只贴前置代码）
-    if (entryPath !== '' && prelude !== '' && rewritten.has(entryPath)) {
-        rewritten.set(entryPath, prelude + rewritten.get(entryPath));
-        notes.push('已向入口 ' + entryPath + ' 注入 process / Buffer 全局');
+    // 按需注入 process / Buffer —— 对齐 OPM：扫描**可达文件**里是否真的用了，
+    // 用了才注入；注入目标作为第二轮种子再走一遍，让它们进归档。
+    if (entryPath !== '') {
+        const neededGlobals: string[] = [];
+        const joinedForRequire = toPosix(joinRelative(dirname(entryPath), NODE_OPERIT_DIR));
+        const relativeForRequire = joinedForRequire.startsWith('.') ? joinedForRequire : './' + joinedForRequire;
+        for (const name of ['process', 'Buffer']) {
+            let used = false;
+            for (const code of rewritten.values()) {
+                if (new RegExp('\\b' + name + '\\b').test(code)) {
+                    used = true;
+                    break;
+                }
+            }
+            if (used) {
+                neededGlobals.push(name);
+            }
+        }
+        if (neededGlobals.length > 0) {
+            const shimSeeds = neededGlobals.map((name) => ({
+                name,
+                archivePath: normalizeArchivePath(joinedForRequire + '/dist/' + (name === 'Buffer' ? 'buffer' : 'process') + '.js')
+            }));
+            const pending: string[] = [];
+            for (const shim of shimSeeds) {
+                if (!visited.has(shim.archivePath)) {
+                    visited.add(shim.archivePath);
+                    pending.push(shim.archivePath);
+                }
+            }
+            while (pending.length > 0) {
+                const archivePath = pending.shift() as string;
+                const diskPath = locate(archivePath);
+                if (diskPath === null) {
+                    errors.push('注入目标不在 node.operit 里：' + archivePath);
+                    continue;
+                }
+                const outcome = rewriteModule(env, archivePath, readFileSync(diskPath, 'utf8'));
+                diagnostics.push(...outcome.diagnostics);
+                errors.push(...outcome.errors);
+                rewritten.set(archivePath, outcome.code);
+                for (const discovered of outcome.discovered) {
+                    if (!visited.has(discovered)) {
+                        visited.add(discovered);
+                        pending.push(discovered);
+                    }
+                }
+            }
+            // 前置代码：只在真的需要时才加
+            const lines: string[] = ['(function () {', '  var __g = (typeof globalThis !== "undefined") ? globalThis : this;'];
+            for (const shim of shimSeeds) {
+                const rel = relativeForRequire + '/dist/' + (shim.name === 'Buffer' ? 'buffer' : 'process') + '.js';
+                if (shim.name === 'Buffer') {
+                    lines.push('  try { var __b = require("' + rel + '"); __g.Buffer = __b && (__b.Buffer || __b) || __g.Buffer; } catch (e) {}');
+                } else {
+                    lines.push('  try { __g.process = require("' + rel + '");');
+                    lines.push('    if (__g.process && !__g.process.env) __g.process.env = {};');
+                    lines.push('    if (__g.process && typeof __g.process.nextTick !== "function") __g.process.nextTick = function (fn) { Promise.resolve().then(fn); };');
+                    lines.push('  } catch (e) {}');
+                }
+            }
+            lines.push('})();');
+            if (rewritten.has(entryPath)) {
+                rewritten.set(entryPath, lines.join('\n') + '\n' + rewritten.get(entryPath));
+                notes.push('注入全局：' + neededGlobals.join(', '));
+            }
+        }
     }
 
     // 额外文件：只收 manifest.extra_files 里显式声明的（照 OPM 的语义）
@@ -263,8 +333,8 @@ export function buildProject(options: BuildOptions): BuildResult {
         notes.push('按 extra_files 带上 ' + collected.assets.length + ' 个额外文件');
     }
 
-    const outName = options.outName === undefined ? baseName(projectDir) : options.outName;
-    const toolpkgPath = join(options.outDir === undefined ? dirname(projectDir) : resolve(projectDir, options.outDir), outName + '.toolpkg');
+    const outName = optionOutName === undefined ? baseName(projectDir) : optionOutName;
+    const toolpkgPath = join(optionOutDir === undefined ? dirname(projectDir) : resolve(projectDir, optionOutDir), outName + '.toolpkg');
 
     if (errors.length > 0) {
         return { ok: false, toolpkgPath, fileCount: rewritten.size, files: [...rewritten.keys()], totalBytes: 0, assets: collected.assets.map((asset) => asset.path), diagnostics, errors, notes };
@@ -466,6 +536,10 @@ function measureBytes(files: Map<string, string>, assets: readonly AssetEntry[])
 const OPM_BUILD_CONFIG = 'manifest.opmbuild.json';
 
 interface OpmBuildConfig {
+    // 对齐 OPM 的 build 参数（snake_case）
+    skip_compile?: unknown;
+    out_name?: unknown;
+    out_dir?: unknown;
     extra_files?: unknown;
     /** OPM 的键名是大写 PACKINFO；小写 packinfo 作为兼容别名 */
     PACKINFO?: unknown;
