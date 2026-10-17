@@ -298,6 +298,21 @@ var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false 
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
 
+// ---------------------------------------------------------------- 跨平台
+
+// 大小写冲突：Windows 上 Res/a.js 与 res/A.js 是两个不同文件，
+// 但归档路径 lowercase 后相同 —— 这种包在 Linux/macOS 上是歧义的。
+var caseProject = makeProject('caseclash', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.case', version: '1.0.0', main: 'main.js' }),
+    'manifest.opmbuild.json': JSON.stringify({ extra_files: ['Res', 'res'] }),
+    'main.js': 'module.exports = 1;\n',
+    'Res/a.js': '1;\n',
+    'res/A.js': '2;\n'
+});
+var caseResult = lib.buildProject({ projectDir: caseProject, install: false });
+ok(!caseResult.ok, '仅大小写不同的归档路径被拦下');
+ok(caseResult.errors.join(' ').indexOf('仅大小写不同') >= 0, '报错指明是大小写冲突', caseResult.errors.join(' ').slice(0, 160));
+
 // ---------------------------------------------------------------- OPM 对齐的参数
 
 // PACKINFO 用大写键（OPM 的键名）

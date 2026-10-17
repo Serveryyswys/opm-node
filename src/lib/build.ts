@@ -284,6 +284,27 @@ export function buildProject(options: BuildOptions): BuildResult {
         notes.push('已生成 PACKINFO（' + packinfoText.split('\n').length + ' 行）');
     }
 
+    // 归档内路径大小写冲突：Windows 上 `Foo.js` 与 `foo.js` 是同一个文件，
+    // Linux/macOS 上不是。在 Windows 打包时如果两者都进了归档，产物在 Linux 上是歧义的
+    // （同名不同大小写两个条目），解包结果取决于文件系统。这里直接拦下。
+    const caseIndex = new Map<string, string>();
+    const caseClashes: string[] = [];
+    for (const entry of entries) {
+        const key = entry.path.toLowerCase();
+        const existing = caseIndex.get(key);
+        if (existing !== undefined && existing !== entry.path) {
+            caseClashes.push(existing + ' ↔ ' + entry.path);
+            continue;
+        }
+        caseIndex.set(key, entry.path);
+    }
+    if (caseClashes.length > 0) {
+        for (const clash of caseClashes) {
+            errors.push('归档内有仅大小写不同的路径：' + clash + '（在 Linux/macOS 上是两个不同文件）');
+        }
+        return { ok: false, toolpkgPath: '', fileCount: 0, files: [], totalBytes: 0, assets: [], diagnostics, errors, notes };
+    }
+
     const archive = createZip(entries);
     mkdirSync(dirname(toolpkgPath), { recursive: true });
     writeFileSync(toolpkgPath, archive);
