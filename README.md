@@ -29,7 +29,7 @@ opm init --no-install         # 只写文件，不跑 npm install
 2. 没有 `manifest.json` 就生成一个骨架（toolpkg 的身份靠它；`toolpkg_id` 记得改成你自己的）；
 3. 工程里有 `.ts` 才补 `tsconfig.json`，且 `outDir` 与 `manifest.main` 对齐。
 
-默认会跑一次 `npm install`。**不指定 registry** —— 包从哪个源来，由你自己的 npm 配置决定
+默认会装一次依赖。
 （用私有源的团队，装的就是私有源里的 `node.operit`）。
 
 ### 然后构建
@@ -52,10 +52,20 @@ npm run build                  # npm 会把 node_modules/.bin/opm 放进 PATH
 其他命令：
 
 ```bash
-opm build [项目目录] --out <名字> --dry-run [--no-install]
-opm verify [项目目录] [--no-install]          # 出包前干跑校验，**不写任何文件**
-opm version [项目目录]                        # 列版本：opm / 工程 / node.operit / toolpkg
+opm build [项目目录] [--out <名字>] [--out-dir <目录>] [--skip-compile] [--dry-run] [--no-install]
+opm verify [项目目录] [--skip-compile] [--no-install]
+opm version [项目目录]
 opm help
+```
+
+输出只说结果，过程说明用 `--verbose`：
+
+```
+$ opm build
+✓ D:\pkg\my.toolpkg  (26 个文件, 208.3 KB)
+
+$ opm verify
+✓ 校验通过
 ```
 
 `verify` 与 `build` 跑同一条流水线，区别是**完全不落盘**，所以适合放进 CI 当门禁。
@@ -67,7 +77,7 @@ opm help
 ## 它做什么
 
 0. **补齐依赖**：`dependencies` 里声明了却没装的包，以及 `node.operit` 本身，先跑一次
-   `npm install`（同样不指定 registry）。缺依赖硬做的结果是一句"解析不到"，
+   `npm install`。缺依赖硬做的结果是一句"解析不到"，
    对使用者没有指导性。要跳过自动安装用 `--no-install`（它会明确告诉你缺什么）。
 1. 读 `manifest.json`，取可达种子：`main` + 每个 `subpackages[].entry`
 2. 顺 `require` 链递归收集被引用的文件（**可达性裁剪** —— 只有真被引用到的才进包）
@@ -89,7 +99,6 @@ opm help
 **不在 require 闭包里、也没写进 `extra_files` 的文件一律不进包。** 这包括工程里的
 杂项（草稿、截图、临时配置）—— 归档内容因此是可解释的：闭包 + 入口 + 显式声明。
 
-> 为什么改：早先这里是"非 JS 一律原样带上"，会把杂项一起打进包，包体不可控
 > 也无法解释。对齐 OPM 的 `extra_files` 之后，"打了什么"完全由声明决定。
 
 ### 构建清单 manifest.opmbuild.json（可选）
@@ -127,7 +136,7 @@ description: 一句话说明
 id: top.serveryyswys.yourpkg
 version: 1.0.0
 author: "甲, 乙"
-license: Apache-2.0
+license: 你的许可证 SPDX 标识
 dependencies:
   - "@serveryyswys/node.operit"
   - ms
@@ -176,4 +185,9 @@ init / search / install / remove / manager / build / verify 七个工具。
 
 ## 许可
 
-Apache-2.0。见 `LICENSE` 与 `NOTICE`。
+**GPL-3.0-or-later**（GNU 通用公共许可证第 3 版或更新版本）。见 `LICENSE`。
+
+本包部分实现移植自 [OperitPackageManager](https://github.com/yyswys-yjyj/OperitPackageManager)
+（同样以 GPL v3 发布）：`src/lib/packinfo.ts`、extra_files 的目录展开、以及收集模型的设计。
+逐文件的对应关系在 `NOTICE` 里列了。
+
