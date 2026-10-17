@@ -95,7 +95,8 @@ export function collectDependenciesFromArchive(archivePaths: Iterable<string>): 
 export function renderPackInfo(
     manifest: Record<string, unknown>,
     options: PackInfoOptions | null | undefined,
-    archivePaths: Iterable<string>
+    archivePaths: Iterable<string>,
+    packageJson?: { license?: unknown; author?: unknown } | null
 ): string | null {
     if (options === null || options === undefined || options.enable !== true) {
         return null;
@@ -125,6 +126,9 @@ export function renderPackInfo(
     }
 
     let author = String(options.author === undefined ? '' : options.author);
+    if (author === '' && packageJson !== null && packageJson !== undefined && typeof packageJson.author === 'string' && packageJson.author !== '') {
+        author = packageJson.author;
+    }
     if (author === '') {
         const raw = manifest.author;
         if (Array.isArray(raw)) {
@@ -137,7 +141,10 @@ export function renderPackInfo(
         lines.push('author: ' + yamlScalar(author));
     }
 
-    const license = String(options.license === undefined ? '' : options.license) || String(manifest.license === undefined ? '' : manifest.license);
+    // 许可证以 package.json 为准（manifest 里不一定写）；顺序：显式参数 > package.json > manifest
+    const license = String(options.license === undefined ? '' : options.license)
+        || String(packageJson !== null && packageJson !== undefined && packageJson.license !== undefined ? packageJson.license : '')
+        || String(manifest.license === undefined ? '' : manifest.license);
     if (license !== '') {
         lines.push('license: ' + yamlScalar(license));
     }

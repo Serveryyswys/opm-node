@@ -13,6 +13,7 @@
  */
 
 import { renderPackInfo } from './packinfo';
+import { scanRequiresAst } from './astscan';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep as path_sep } from 'node:path';
 import { createZip, ZipEntry } from './zip';
@@ -250,6 +251,80 @@ export function buildProject(options: BuildOptions): BuildResult {
                 queue.push(discovered);
             }
         }
+
+        // 动态 require（对齐 OPM 6.8）：
+        //   有静态前缀 -> 把前缀目录整目录收进归档（运行时按前缀拼路径，收全才可能命中）
+        //   无静态前缀 -> 无法确定目标，构建失败
+        const ast = scanRequiresAst(source);
+        if (ast.ok) {
+            for (const call of ast.calls) {
+                if (call.kind !== 'dynamic') {
+                    continue;
+                }
+                const prefix = (call.prefix === undefined ? '' : call.prefix).trim();
+                if (prefix === '') {
+                    errors.push(archivePath + ':' + call.line + ' 是完全动态的 require，无法确定目标目录；请改为显式路径。');
+                    continue;
+                }
+                const baseDir = archivePath.indexOf('/') < 0 ? '' : archivePath.slice(0, archivePath.lastIndexOf('/'));
+                const dirPath = normalizeArchivePath(baseDir === '' ? prefix : baseDir + '/' + prefix);
+                // 前缀目录可能是「归档路径」，也可能是 TS 产物目录下的实体；两处都试。
+                const candidates: string[] = [resolve(projectDir, dirPath)];
+                if (plan.outDir !== null) {
+                    candidates.push(resolve(projectDir, plan.outDir, dirPath));
+                }
+                let diskDir: string | null = null;
+                for (const candidate of candidates) {
+                    if (existsSync(candidate) && statSync(candidate).isDirectory()) {
+                        diskDir = candidate;
+                        break;
+                    }
+                }
+                if (diskDir === null) {
+                    errors.push(archivePath + ':' + call.line + ' 的动态 require 前缀目录不存在：' + dirPath);
+                    continue;
+                }
+                collectDirectory(dirPath, diskDir);
+            }
+        }
+    }
+
+    /**
+     * 把某个目录下的全部文件按归档路径入队（跳过 node_modules 与点目录）。
+     * 只收文件，目录本身不进归档。
+     */
+    function collectDirectory(archiveDir: string, diskDir: string): void {
+        const walk = (relDir: string, absDir: string, depth: number): void => {
+            if (depth <= 0) {
+                return;
+            }
+            let entries;
+            try {
+                entries = readdirSync(absDir, { withFileTypes: true });
+            } catch {
+                return;
+            }
+            for (const entry of entries) {
+                if (entry.name.startsWith('.')) {
+                    continue;
+                }
+                const childRel = relDir === '' ? entry.name : relDir + '/' + entry.name;
+                const childAbs = join(absDir, entry.name);
+                if (entry.isDirectory()) {
+                    if (entry.name === 'node_modules') {
+                        continue;
+                    }
+                    walk(childRel, childAbs, depth - 1);
+                    continue;
+                }
+                const childArchive = normalizeArchivePath(archiveDir + '/' + childRel);
+                if (!visited.has(childArchive)) {
+                    visited.add(childArchive);
+                    queue.push(childArchive);
+                }
+            }
+        };
+        walk('', diskDir, 10);
     }
 
     // 按需注入 process / Buffer —— 对齐 OPM：扫描**可达文件**里是否真的用了，
@@ -365,7 +440,13 @@ export function buildProject(options: BuildOptions): BuildResult {
         : (manifest as unknown as Record<string, unknown>).PACKINFO !== undefined
             ? (manifest as unknown as Record<string, unknown>).PACKINFO as Parameters<typeof renderPackInfo>[1]
             : manifest.packinfo) as Parameters<typeof renderPackInfo>[1];
-    const packinfoText = renderPackInfo(manifest as unknown as Record<string, unknown>, packinfoOptions, archiveEntries.map((entry) => entry.path));
+    const packageJson = readPackageJsonLoose(projectDir);
+    const packinfoText = renderPackInfo(
+        manifest as unknown as Record<string, unknown>,
+        packinfoOptions,
+        archiveEntries.map((entry) => entry.path),
+        packageJson
+    );
     if (packinfoText !== null) {
         entries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
         archiveEntries.push({ path: 'PACKINFO', content: Buffer.from(packinfoText, 'utf8') });
@@ -563,6 +644,20 @@ function readBuildConfig(projectDir: string, errors: string[]): OpmBuildConfig {
         return {};
     }
     return parsed as OpmBuildConfig;
+}
+
+/** 读项目的 package.json（可选）；许可证/作者以它为准，manifest 里不一定有。 */
+function readPackageJsonLoose(projectDir: string): { license?: unknown; author?: unknown } | null {
+    const p = join(projectDir, 'package.json');
+    if (!existsSync(p)) {
+        return null;
+    }
+    try {
+        const parsed = JSON.parse(readFileSync(p, 'utf8'));
+        return parsed !== null && typeof parsed === 'object' ? parsed as { license?: unknown; author?: unknown } : null;
+    } catch {
+        return null;
+    }
 }
 
 function baseName(value: string): string {

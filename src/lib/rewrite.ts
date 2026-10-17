@@ -173,9 +173,8 @@ export function rewriteModule(env: RewriteEnv, archivePath: string, source: stri
     for (let index = sites.length - 1; index >= 0; index -= 1) {
         const site = sites[index];
         if (site.dynamic) {
-            // 改不了就必须说，不能默认放过：运行时对裸名静默返回 {}，
-            // 症状会是"某个依赖神秘失效"，比构建立刻失败难查得多。
-            errors.push(archivePath + ':' + site.start + ' 是无法静态分析的 require —— 运行时必然返回 {}。改用字面量：require(\'fs\')');
+            // 动态 require 不在这里裁决：可分析性由 AST 扫描判断（build.ts 侧），
+            // 有静态前缀就把前缀目录整目录收进归档，完全动态才失败。这里只跳过替换。
             continue;
         }
         const spec = site.spec as string;

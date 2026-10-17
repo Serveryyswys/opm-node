@@ -316,6 +316,32 @@ var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false 
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
 
+// ---------------------------------------------------------------- 动态 require 的前缀收集（对齐 OPM 6.8）
+
+// 有静态前缀 -> 前缀目录整目录进归档（运行时按前缀拼路径，收全才可能命中）
+var prefixProject = makeProject('dynprefix', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.dynprefix', version: '1.0.0', main: 'main.js' }),
+    'main.js': "var name = 'en.js';\nrequire('./libs/' + name);\n",
+    'libs/en.js': 'module.exports = 1;\n',
+    'libs/zh.js': 'module.exports = 2;\n',
+    'libs/sub/deep.js': 'module.exports = 3;\n'
+});
+var prefixResult = lib.buildProject({ projectDir: prefixProject, install: false });
+ok(prefixResult.ok, '有静态前缀的动态 require 能构建', JSON.stringify(prefixResult.errors).slice(0, 200));
+var prefixNames = lib.readZip(fs.readFileSync(prefixResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(prefixNames.indexOf('libs/en.js') >= 0 && prefixNames.indexOf('libs/zh.js') >= 0,
+   '前缀目录下的文件全部进归档（不只是被点名那个）');
+ok(prefixNames.indexOf('libs/sub/deep.js') >= 0, '前缀目录的子目录也递归收');
+
+// 完全动态（无静态前缀）-> 构建失败
+var noPrefixProject = makeProject('dynnoprefix', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.dynnoprefix', version: '1.0.0', main: 'main.js' }),
+    'main.js': "var p = someVar;\nrequire(p);\n"
+});
+var noPrefixResult = lib.buildProject({ projectDir: noPrefixProject, install: false });
+ok(!noPrefixResult.ok, '完全动态的 require 让构建失败');
+ok(noPrefixResult.errors.join(' ').indexOf('完全动态') >= 0, '报错说明是完全动态', noPrefixResult.errors.join(' ').slice(0, 160));
+
 // ---------------------------------------------------------------- 构建期清单全参数
 
 // OPM 的 build 有 6 个参数；配置清单要能覆盖除 project_dir 以外的全部
@@ -447,7 +473,7 @@ var dynamicProject = makeProject('dynamicreq', {
 });
 var dynamicResult = lib.buildProject({ projectDir: dynamicProject, install: false });
 ok(!dynamicResult.ok, '变量形式的 require 让构建失败');
-ok(dynamicResult.errors.join(' ').indexOf('无法静态分析') >= 0, '报错指明是动态 require', dynamicResult.errors.join(' ').slice(0, 200));
+ok(dynamicResult.errors.join(' ').indexOf('完全动态') >= 0, '报错指明是动态 require', dynamicResult.errors.join(' ').slice(0, 200));
 
 // 拼接不能被截断成 'f' —— 截断比忽略更糟
 var concatProject = makeProject('concatreq', {
@@ -456,7 +482,7 @@ var concatProject = makeProject('concatreq', {
 });
 var concatResult = lib.buildProject({ projectDir: concatProject, install: false });
 ok(!concatResult.ok, "require('f' + 's') 被判为动态（而不是截断成 f 去重写）");
-ok(concatResult.errors.join(' ').indexOf('无法静态分析') >= 0, '拼接形式的报错正确');
+ok(concatResult.errors.join(' ').indexOf('完全动态') >= 0, '拼接形式的报错正确（前缀无 / 视为完全动态）');
 
 // 模板串同样拦下
 var tplProject = makeProject('tplreq', {
