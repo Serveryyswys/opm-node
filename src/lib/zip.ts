@@ -63,21 +63,27 @@ export function createZip(entries: readonly ZipEntry[], options: ZipOptions = {}
     const centralParts: Buffer[] = [];
     let offset = 0;
 
-    const sorted = entries.slice().sort((left, right) => (left.path < right.path ? -1 : left.path > right.path ? 1 : 0));
+    // 不排序：保持调用方给的顺序，让 manifest.json 是**第一个**条目
+    // （安装器通常先从首条目读清单）。
+    const sorted = entries.slice();
 
     for (const entry of sorted) {
         const nameBytes = Buffer.from(entry.path, 'utf8');
+        // Java 的 ZipOutputStream 只对非 ASCII 文件名置 EFS 位；我们也只在这种情况下置
+        const utf8Flag = /[^\x00-\x7f]/.test(entry.path) ? 0x0800 : 0;
         const crc = crc32(entry.content);
-        const deflated = deflateRawSync(entry.content, { level: 9 });
-        // 压缩后反而更大时退回 stored（method 0），这是 zip 的常规做法
-        const useDeflate = deflated.length < entry.content.length;
-        const payload = useDeflate ? deflated : entry.content;
-        const method = useDeflate ? 8 : 0;
+        // 一律 STORED（method 0），不压缩。
+        //
+        // 依据实测：OPM 的产物（走 Android 的 Tools.Files.zip）是 compression method=store，
+        // Operit 装得上；而 deflate 的包**装不上**。归档里主要是 JS 文本，体积不是瓶颈，
+        // 与能装上的格式保持一致比省几 KB 重要得多。
+        const payload = entry.content;
+        const method = 0;
 
         const local = Buffer.alloc(30);
         local.writeUInt32LE(0x04034b50, 0);
         local.writeUInt16LE(20, 4);            // version needed
-        local.writeUInt16LE(0x0800, 6);        // flags: UTF-8 文件名
+        local.writeUInt16LE(utf8Flag, 6);      // flags: 仅文件名非 ASCII 时置 UTF-8 位
         local.writeUInt16LE(method, 8);
         local.writeUInt16LE(dosTime, 10);
         local.writeUInt16LE(dosDate, 12);
@@ -92,7 +98,7 @@ export function createZip(entries: readonly ZipEntry[], options: ZipOptions = {}
         central.writeUInt32LE(0x02014b50, 0);
         central.writeUInt16LE(20, 4);          // version made by
         central.writeUInt16LE(20, 6);          // version needed
-        central.writeUInt16LE(0x0800, 8);
+        central.writeUInt16LE(utf8Flag, 8);
         central.writeUInt16LE(method, 10);
         central.writeUInt16LE(dosTime, 12);
         central.writeUInt16LE(dosDate, 14);
