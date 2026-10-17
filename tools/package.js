@@ -76,20 +76,43 @@ function countFiles(dir) {
 }
 
 
-/** 版本已经在注册表上就拒绝打包 —— 已发布的版本号不能被覆盖，
- *  内容一变就必须升版本（这个错误我已经犯过两次）。 */
+/**
+ * 版本已经发布就拒绝打包；**无法确认时同样拒绝**
+ * （宁可什么都不产出，也不覆盖已发布版本）。
+ *
+ * 查询用文件描述符重定向而不是管道：受限环境下管道捕获子进程输出会失败，
+ * 结果就是"查询输出为空 → 误判为可发布"。这个坑踩过一次。
+ * 跳过检查：OPM_ALLOW_PUBLISHED=1
+ */
 function assertVersionUnpublished(name, version) {
-    var result = childProcess.spawnSync(
-        'npm view ' + name + '@' + version + ' version --cache "' + path.join(root, '..', '.npm-cache') + '"',
-        { cwd: root, encoding: 'utf8', shell: true }
-    );
-    var out = (result.stdout || '') + (result.stderr || '');
-    if (result.status === 0 && out.indexOf(version) >= 0) {
+    if (process.env.OPM_ALLOW_PUBLISHED === '1') {
+        console.log('（OPM_ALLOW_PUBLISHED=1：跳过版本已发布检查）');
+        return;
+    }
+    var logPath = path.join(root, '..', '.publish-check-' + process.pid + '.txt');
+    var fd = fs.openSync(logPath, 'w');
+    var result;
+    try {
+        result = childProcess.spawnSync(
+            'npm view ' + name + '@' + version + ' version --cache "' + path.join(root, '..', '.npm-cache') + '"',
+            { cwd: root, stdio: ['ignore', fd, fd], shell: true }
+        );
+    } finally {
+        fs.closeSync(fd);
+    }
+    var out = fs.existsSync(logPath) ? fs.readFileSync(logPath, 'utf8') : '';
+    fs.rmSync(logPath, { force: true });
+
+    var published = result.status === 0 && out.indexOf(version) >= 0;
+    var definitelyMissing = out.indexOf('E404') >= 0;
+    if (published) {
         throw new Error('版本 ' + name + '@' + version + ' 已经在注册表上了。已发布的版本号不能复用，\n' +
             '请先把 package.json 的 version 升上去，再重新打包。');
     }
-    if (result.status !== 0 && out.indexOf('E404') < 0) {
-        console.log('（警告：查询注册表失败，跳过"版本是否已发布"检查）');
+    if (!definitelyMissing) {
+        throw new Error('无法确认 ' + name + '@' + version + ' 是否已发布（查询未返回 E404）。\n' +
+            '为避免覆盖已发布版本，打包中止。确认它确实未发布后，可设 OPM_ALLOW_PUBLISHED=1 跳过检查。\n' +
+            '查询输出：' + out.trim().split('\n').slice(-3).join(' | '));
     }
 }
 
