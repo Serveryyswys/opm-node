@@ -36,7 +36,7 @@ function usage(): string {
         '用法：',
         '  opm init [项目目录] [--no-install] [--overwrite]',
         '      把工程准备到能 build：补 scripts.build 与依赖声明、生成 manifest.json 骨架、',
-        '      TS 工程补 tsconfig.json。默认跑一次 npm install（不指定 registry，走你自己的 npm 源）。',
+        '      TS 工程补 tsconfig.json；默认装依赖。',
         '',
         '  opm build [项目目录] [--out <名字>] [--dry-run] [--no-install]',
         '      计算可达性、重写裸名、拦截不支持的依赖，压成 .toolpkg',
@@ -77,6 +77,16 @@ function parseArgs(argv: string[]): { positional: string[]; flags: Map<string, s
     return { positional, flags };
 }
 
+function formatBytes(bytes: number): string {
+    if (bytes < 1024) {
+        return bytes + ' B';
+    }
+    if (bytes < 1024 * 1024) {
+        return (bytes / 1024).toFixed(1) + ' KB';
+    }
+    return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
 function main(argv: string[]): number {
     const command = argv[0];
     const { positional, flags } = parseArgs(argv.slice(1));
@@ -107,8 +117,10 @@ function main(argv: string[]): number {
         for (const item of result.unchanged) {
             console.log('  = ' + item + '（已存在，未改动）');
         }
-        for (const note of result.notes) {
-            console.log('  · ' + note);
+        if (flags.has('verbose')) {
+            for (const note of result.notes) {
+                console.log('  · ' + note);
+            }
         }
         if (!result.ok) {
             console.error('');
@@ -118,10 +130,11 @@ function main(argv: string[]): number {
             }
             return 1;
         }
-        console.log('');
-        console.log('下一步：');
-        for (const step of result.nextSteps) {
-            console.log('  ' + step);
+        if (result.nextSteps.length > 0) {
+            console.log('');
+            for (const step of result.nextSteps) {
+                console.log('  ' + step);
+            }
         }
         return 0;
     }
@@ -135,28 +148,24 @@ function main(argv: string[]): number {
             install: !flags.has('no-install')
         });
 
-        for (const note of result.notes) {
-            console.log('  · ' + note);
+        if (!result.ok) {
+            for (const error of result.errors) {
+                console.error('✗ ' + error);
+            }
+            return 1;
         }
-        if (result.diagnostics.length > 0) {
+        if (flags.has('verbose')) {
+            for (const note of result.notes) {
+                console.log('· ' + note);
+            }
             const byKind = new Map<string, number>();
             for (const item of result.diagnostics) {
                 byKind.set(item.kind, (byKind.get(item.kind) ?? 0) + 1);
             }
-            const summary = Array.from(byKind.entries()).map(([kind, count]) => kind + ' ' + count).join(' / ');
-            console.log('  重写 ' + result.diagnostics.length + ' 处（' + summary + '）');
+            const summary = Array.from(byKind.entries()).map(([kind, count]) => kind + ' ' + count).join(', ');
+            console.log('· 重写 ' + result.diagnostics.length + ' 处（' + summary + '）');
         }
-        if (!result.ok) {
-            console.error('');
-            console.error('构建失败（' + result.errors.length + ' 个问题）：');
-            for (const error of result.errors) {
-                console.error('  ✗ ' + error);
-            }
-            return 1;
-        }
-        console.log('');
-        console.log('✓ 已打包 ' + result.fileCount + ' 个文件');
-        console.log('  ' + result.toolpkgPath);
+        console.log('✓ ' + result.toolpkgPath + '  (' + result.fileCount + ' 个文件, ' + formatBytes(result.totalBytes) + ')');
         return 0;
     }
 
@@ -164,33 +173,28 @@ function main(argv: string[]): number {
         const projectDir = resolve(positional[0] === undefined ? process.cwd() : positional[0]);
         const report = verifyProject({ projectDir, install: !flags.has('no-install') });
 
-        console.log('检查项：');
-        for (const check of report.checks) {
-            console.log('  ' + (check.ok ? '✓' : '✗') + ' ' + check.name + ' —— ' + check.detail);
-        }
-        const stats = report.stats;
-        console.log('');
-        console.log('统计：');
-        console.log('  归档文件   ' + stats.archiveFiles + ' 个（其中资产 ' + stats.assets + ' 个），共 ' + stats.totalBytes + ' 字节');
-        console.log('  重写      内建 ' + stats.builtin + ' / npm 包 ' + stats.package + ' / 相对 ' + stats.relative + ' / 保持原样 ' + stats.untouched);
-        console.log('  引入的包  ' + (stats.packages.length === 0 ? '（无）' : stats.packages.join(', ')));
-        console.log('  node.operit ' + stats.nodeOperitVersion);
-        for (const note of report.notes) {
-            console.log('  · ' + note);
+        if (flags.has('verbose')) {
+            for (const check of report.checks) {
+                console.log((check.ok ? '✓ ' : '✗ ') + check.name + ' —— ' + check.detail);
+            }
+            const stats = report.stats;
+            console.log('· 归档 ' + stats.archiveFiles + ' 个文件, ' + formatBytes(stats.totalBytes)
+                + '；额外文件 ' + stats.assets + '；依赖 ' + (stats.packages.length === 0 ? '无' : stats.packages.join(', '))
+                + '；node.operit ' + stats.nodeOperitVersion);
+            for (const note of report.notes) {
+                console.log('· ' + note);
+            }
         }
         for (const warning of report.warnings) {
-            console.log('  ! ' + warning);
+            console.log('! ' + warning);
         }
         if (!report.ok) {
-            console.error('');
-            console.error('校验未通过（' + report.errors.length + ' 个问题）：');
             for (const error of report.errors) {
-                console.error('  ✗ ' + error);
+                console.error('✗ ' + error);
             }
             return 1;
         }
-        console.log('');
-        console.log('✓ 校验通过（未写任何文件）');
+        console.log('✓ 校验通过');
         return 0;
     }
 

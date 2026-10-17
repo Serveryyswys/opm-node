@@ -202,7 +202,7 @@ export function initProject(options: InitOptions): InitResult {
         if (!installed.ok) {
             errors.push('npm install 失败：\n' + installOutput.trim());
         } else {
-            notes.push('已执行 npm install（源按你自己的 npm 配置，未指定 registry）');
+            notes.push('已执行 npm install');
         }
     } else {
         nextSteps.push('npm install');

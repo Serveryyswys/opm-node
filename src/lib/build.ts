@@ -116,7 +116,7 @@ export function buildProject(options: BuildOptions): BuildResult {
             );
             return { ok: false, toolpkgPath: '', fileCount: 0, files: [], totalBytes: 0, assets: [], diagnostics, errors, notes };
         }
-        notes.push('检测到缺少依赖：' + audit.missing.join(', ') + '，正在执行 npm install');
+        notes.push('缺少依赖，正在安装：' + audit.missing.join(', '));
         const installed = installDependencies(projectDir);
         if (!installed.ok) {
             errors.push('npm install 失败：\n' + installed.output.trim());
