@@ -59,6 +59,22 @@ interface ToolPkgManifest {
     subpackages?: unknown;
 }
 
+/** 把可能含 ../ 的相对路径解析成根相对的归档路径。 */
+function normalizeArchivePath(value: string): string {
+    const parts: string[] = [];
+    for (const segment of toPosix(value).split('/')) {
+        if (segment === '' || segment === '.') {
+            continue;
+        }
+        if (segment === '..') {
+            parts.pop();
+            continue;
+        }
+        parts.push(segment);
+    }
+    return parts.join('/');
+}
+
 function toPosix(value: string): string {
     return value.replace(/\\/g, '/').replace(/^\.\//, '');
 }
@@ -188,8 +204,10 @@ export function buildProject(options: BuildOptions): BuildResult {
             '/* opm: Operit 沙盒没有 process / Buffer 全局，入口先挂上（见 node.operit 的 BUILTINS.json） */\n' +
             "globalThis.process = require('" + relative + "/dist/process.js');\n" +
             "globalThis.Buffer = require('" + relative + "/dist/buffer.js').Buffer;\n";
-        seeds.push(joined + '/dist/process.js');
-        seeds.push(joined + '/dist/buffer.js');
+        // joined 是**require 用的相对写法**（可能是 ../node_modules/...），
+        // 但归档内路径必须根相对 —— 这里解析掉 .. 再入种子。
+        seeds.push(normalizeArchivePath(joined + '/dist/process.js'));
+        seeds.push(normalizeArchivePath(joined + '/dist/buffer.js'));
     }
 
     const visited = new Set<string>();

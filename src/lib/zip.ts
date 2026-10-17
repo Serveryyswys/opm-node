@@ -49,6 +49,29 @@ export interface ZipOptions {
     mtime?: Date;
 }
 
+// 归档内路径必须根相对：不能有 ..、不能以 / 开头、不能有反斜杠。
+// 入口在 dist/ 下时到 node_modules 的相对写法是 ../node_modules/... ——
+// 那个字符串一旦被当成归档路径写进 zip，Operit 就报 "Failed to parse toolpkg file"。
+function assertArchivePath(entryPath: string): void {
+    if (entryPath === '') {
+        throw new Error('归档路径不能为空');
+    }
+    if (entryPath.indexOf('\\') >= 0) {
+        throw new Error('归档路径不能用反斜杠：' + entryPath);
+    }
+    if (entryPath.charAt(0) === '/') {
+        throw new Error('归档路径不能是绝对路径：' + entryPath);
+    }
+    for (const segment of entryPath.split('/')) {
+        if (segment === '..') {
+            throw new Error('归档路径不能包含 ..：' + entryPath);
+        }
+        if (segment === '.' || segment === '') {
+            throw new Error('归档路径不能包含 . 或空段：' + entryPath);
+        }
+    }
+}
+
 export function createZip(entries: readonly ZipEntry[], options: ZipOptions = {}): Buffer {
     const reproducible = options.reproducible !== false;
     let dosTime = DOS_TIME;
@@ -68,6 +91,7 @@ export function createZip(entries: readonly ZipEntry[], options: ZipOptions = {}
     const sorted = entries.slice();
 
     for (const entry of sorted) {
+        assertArchivePath(entry.path);
         const nameBytes = Buffer.from(entry.path, 'utf8');
         // Java 的 ZipOutputStream 只对非 ASCII 文件名置 EFS 位；我们也只在这种情况下置
         const utf8Flag = /[^\x00-\x7f]/.test(entry.path) ? 0x0800 : 0;
