@@ -103,22 +103,33 @@ $ opm verify
 
 ### 构建清单 manifest.opmbuild.json（可选）
 
-项目根放一个 `manifest.opmbuild.json`，把**构建期**的决策与运行时 manifest 分开：
+项目根放一个 `manifest.opmbuild.json`，把**构建期**的决策与运行时 manifest 分开。
+键名与 opm-operit 的 build 参数一致（`project_dir` 除外，它由命令行位置参数给出）：
+
+| 键 | 类型 | 说明 |
+| --- | --- | --- |
+| `skip_compile` | boolean | 跳过 tsc，直接用已有的编译产物（仅 TS 模式有意义） |
+| `out_name` | string | 产物文件名（不含 `.toolpkg`），默认取项目根目录名 |
+| `out_dir` | string | 产物落盘目录（相对项目根或绝对路径）。**默认 `<项目根>/opmbuild`** |
+| `extra_files` | string[] | 额外强制进包的路径。文件直接收；目录**递归**收（跳过 `node_modules` 与点目录，深度上限 10） |
+| `PACKINFO` | object | 生成市场审核用的 `PACKINFO`。仅 `{ "enable": true }` 时生成 |
 
 ```json
 {
-  "extra_files": ["resources", "i18n"],
-  "packinfo": { "enable": true }
+  "skip_compile": false,
+  "out_name": "Overmem",
+  "out_dir": "opmbuild",
+  "extra_files": ["resources", "LICENSE", "README.md"],
+  "PACKINFO": { "enable": true }
 }
 ```
 
-- `extra_files`：额外进包的路径，文件直接收，目录**递归**收（跳过 `node_modules` 与点目录）；
-- `packinfo`：是否生成 `PACKINFO`（见下）；
-- **优先级高于** `manifest.json` 里的同名字段；文件不存在就用 manifest 里的，都没有就不打额外文件；
+- **优先级**：命令行参数 > 本清单 > `manifest.json` 里的同名字段；
+- 文件不存在就用 `manifest.json` 里的，都没有就不打额外文件；
 - 不是合法 JSON 会**明确报错**，不会静默忽略。
 
-> 为什么单独一个文件：`manifest.json` 是装上设备后给 Operit 读的**运行时**元数据，
-> 而"打哪些文件、要不要 PACKINFO"是**构建期**的事。混在一起会让运行时清单变脏。
+> 与 opm-operit 的唯一差异：**产物默认落在 `<项目根>/opmbuild`**，而 opm-operit 落在项目根的上一级。
+> 其余（可达性、重写、额外文件、PACKINFO、打包格式）与它一致。
 
 ### PACKINFO（可选）
 

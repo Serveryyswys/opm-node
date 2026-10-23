@@ -81,10 +81,10 @@ export async function packToolpkg(opts: PackOptions): Promise<PackResult> {
 
     // 4. 压成 .toolpkg（zip，不含顶层目录）
     const name = opts.outName || baseName(opts.projectDir);
-    const parentOfProject = dirname(opts.projectDir.replace(/\/+$/, ''));
+    // 与 opm-operit 的唯一差异：默认落盘目录是 <项目根>/opmbuild，而不是项目根的上一级。
     const destDir = (opts.outDir && opts.outDir.trim())
         ? opts.outDir.replace(/\/+$/, '')
-        : parentOfProject;
+        : join(opts.projectDir.replace(/\/+$/, ''), 'opmbuild');
     // 确保落盘目录存在
     mkdirSync(destDir, { recursive: true });
     const toolpkgPath = join(destDir, name + '.toolpkg');
