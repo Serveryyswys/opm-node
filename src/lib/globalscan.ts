@@ -1,5 +1,7 @@
 'use strict';
 
+import * as acorn from 'acorn';
+
 /**
  * 移植自 OPM 的 src/build/rewriter.ts（scanGlobalRefs 及其词法辅助函数），逐字，未改动。
  *
@@ -73,5 +75,64 @@ export function scanGlobalRefs(code: string, names: string[]): string[] {
         }
         i += 1;
     }
+    return Array.from(hit);
+}
+/**
+ * AST 版：判定是否**真的引用**了这些全局标识符。
+ *
+ * 词法版（scanGlobalRefs，OPM 原版）只看"前一个非空白不是点、后一个是冒号"——
+ * 于是 `static process(item) { ... }` 这种**同名静态方法**会被误判成用到了 process，
+ * 进而注入整个 process 垫片，把 node.operit 的十几个文件拖进归档。
+ *
+ * 返回 null 表示解析失败，调用方回退词法版。
+ */
+export function scanGlobalRefsAst(code: string, names: string[]): string[] | null {
+    let ast: any;
+    try {
+        ast = acorn.parse(code, {
+            ecmaVersion: 'latest',
+            sourceType: 'script',
+            allowReturnOutsideFunction: true,
+            allowAwaitOutsideFunction: true
+        });
+    } catch (_e) {
+        try {
+            ast = acorn.parse(code, {
+                ecmaVersion: 'latest',
+                sourceType: 'module',
+                allowReturnOutsideFunction: true,
+                allowAwaitOutsideFunction: true
+            });
+        } catch (_e2) {
+            return null;
+        }
+    }
+    const want = new Set(names);
+    const hit = new Set<string>();
+    const walk = (node: any, key: string): void => {
+        if (!node || typeof node !== 'object') {
+            return;
+        }
+        if (node.type === 'Identifier' && want.has(node.name)) {
+            // 排除：成员属性 a.process、对象键 { process: 1 }、标签
+            if (key !== 'property' && key !== 'key' && key !== 'label') {
+                hit.add(node.name);
+            }
+        }
+        for (const k of Object.keys(node)) {
+            if (k === 'loc' || k === 'start' || k === 'end') {
+                continue;
+            }
+            const child = node[k];
+            if (Array.isArray(child)) {
+                for (const item of child) {
+                    walk(item, k);
+                }
+            } else if (child && typeof child === 'object') {
+                walk(child, k);
+            }
+        }
+    };
+    walk(ast, '');
     return Array.from(hit);
 }

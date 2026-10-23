@@ -29,6 +29,7 @@ import { collectReachable, ArchiveFile } from '../build/reachability';
 import { buildGlobalsPrelude } from '../build/globals';
 import { packToolpkg } from '../build/packer';
 import { normalizePath, scanGlobalRefs } from '../build/rewriter';
+import { scanGlobalRefsAst } from '../lib/globalscan';
 import { prepareGlobalShadow, cleanupGlobalShadow } from '../build/globalshadow';
 import { isExcluded as isExcludedShared, expandExtraEntry } from '../build/extrafiles';
 import { renderPackInfo, PackInfoOptions } from '../build/packinfo';
@@ -186,7 +187,10 @@ function detectNeededGlobals(files: Map<string, ArchiveFile>): string[] {
         if (archivePath.indexOf('node_modules/') === 0) continue;
         const t = f.text || '';
         if (!t) continue;
-        for (const name of scanGlobalRefs(t, ['process', 'Buffer'])) hit.add(name);
+        // AST 优先（能排除 static process() 这种同名方法），解析失败才回退词法版
+    const astRefs = scanGlobalRefsAst(t, ['process', 'Buffer']);
+    const refs = astRefs === null ? scanGlobalRefs(t, ['process', 'Buffer']) : astRefs;
+    for (const name of refs) hit.add(name);
     }
     // 保持稳定顺序
     const needed: string[] = [];

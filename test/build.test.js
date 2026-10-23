@@ -136,6 +136,27 @@ async function run() {
         ok(a7.map['main.js'].toString().indexOf('__g.process') < 0, '入口无注入语句');
     }
 
+    // 7.5 同名方法与属性不得误判为全局引用
+    var d75 = makeProject('methodname', {
+        'manifest.json': manifest({ toolpkg_id: 'top.real.mn' }),
+        'main.js': [
+            'class P {',
+            '  static process(item, all) { return item + all; }',
+            '  constructor() { this.Buffer = 1; }',
+            '  run() { return { process: 1 }; }',
+            '}',
+            'module.exports = P;'
+        ].join('\n') + '\n'
+    });
+    var r75 = await lib.runBuild({ projectDir: d75 });
+    ok(r75.ok, '同名方法工程构建成功', r75.message);
+    if (r75.ok) {
+        var a75 = archive(r75.toolpkgPath);
+        ok(!a75.names.some(function (n) { return n.indexOf('node.operit') >= 0; }),
+            'static process() 与 this.Buffer 不触发注入', a75.names.filter(function (n) { return n.indexOf('node.operit') >= 0; }).slice(0, 3).join(','));
+        ok(a75.map['main.js'].toString().indexOf('__g.process') < 0, '入口无 process 注入');
+    }
+
     // 8. 模拟加载（simulate）
     var sim = require('../dist/commands/simulate.js');
     var mainWithReg = "exports.registerToolPkg = function () { return true; };\n";
