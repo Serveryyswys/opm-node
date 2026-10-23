@@ -136,6 +136,31 @@ async function run() {
         ok(a7.map['main.js'].toString().indexOf('__g.process') < 0, '入口无注入语句');
     }
 
+    // 8. 模拟加载（simulate）
+    var sim = require('../dist/commands/simulate.js');
+    var mainWithReg = "exports.registerToolPkg = function () { return true; };\n";
+    var reg = sim.simulateRegistration(mainWithReg);
+    ok(reg.hasRegisterFn === true || reg.issues.length > 0, '模拟注册能识别 registerToolPkg（或给出原因）', JSON.stringify(reg.issues));
+    var meta = [
+        '/* METADATA',
+        '{',
+        '  "name": "demo",',
+        '  "description": "示例",',
+        '  "tools": [',
+        '    { "name": "do_thing", "description": "做点事", "parameters": [] }',
+        '  ]',
+        '}',
+        '*/',
+        'function do_thing() { return 1; }'
+    ].join('\n');
+    var parsed = sim.simulateSubpackageMeta('packages/demo.js', meta);
+    ok(parsed.hasMeta === true, '抽到 METADATA 块');
+    ok(parsed.parsed === true, 'METADATA 能被 hjson 解析');
+    equal(parsed.name, 'demo', 'METADATA 的 name');
+    equal(parsed.toolCount, 1, 'METADATA 的 tool 数');
+    var noMeta = sim.simulateSubpackageMeta('packages/x.js', 'module.exports = 1;\n');
+    ok(noMeta.hasMeta === false, '没有 METADATA 时如实报告');
+
     console.log('');
     if (failures.length > 0) {
         console.log('失败样例:');

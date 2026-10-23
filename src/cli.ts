@@ -16,6 +16,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { runBuild } from './commands/build';
+import { simulateRegistration, simulateSubpackageMeta } from './commands/simulate';
 import { auditDependencies, installDependencies } from './lib/dependencies';
 import { describeVersions } from './lib/version';
 import { initProject } from './lib/init';
@@ -225,6 +226,52 @@ async function main(argv: string[]): Promise<number> {
                 }
             }
             return 1;
+        }
+        // 模拟加载：复刻 Operit 加载期的静态检查（不执行脚本、不落盘）。
+        // 依据 PackageManager.extractMetadataFromJs / ToolPkgMainRegistrationScriptParser。
+        const manifestPath = join(projectDir, 'manifest.json');
+        if (existsSync(manifestPath)) {
+            let manifest: Record<string, unknown> = {};
+            try {
+                manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as Record<string, unknown>;
+            } catch {
+                console.error('✗ manifest.json 解析失败');
+                return 1;
+            }
+            const mainRel = typeof manifest.main === 'string' && manifest.main !== '' ? manifest.main : 'main.js';
+            const mainPath = join(projectDir, mainRel);
+            if (existsSync(mainPath)) {
+                const reg = simulateRegistration(readFileSync(mainPath, 'utf8'));
+                if (!reg.hasRegisterFn) {
+                    console.log('! ' + mainRel + ' 未检出 registerToolPkg 定义（静态检查，可能是动态写法）');
+                }
+                for (const issue of reg.issues) {
+                    console.log('! ' + mainRel + '：' + issue);
+                }
+            }
+            const subs = Array.isArray(manifest.subpackages) ? manifest.subpackages : [];
+            for (const sub of subs) {
+                const entry = sub !== null && typeof sub === 'object' && typeof (sub as Record<string, unknown>).entry === 'string'
+                    ? String((sub as Record<string, unknown>).entry) : '';
+                if (entry === '') {
+                    continue;
+                }
+                const entryPath = join(projectDir, entry);
+                if (!existsSync(entryPath)) {
+                    console.error('✗ 子包入口不存在：' + entry);
+                    return 1;
+                }
+                const meta = simulateSubpackageMeta(entry, readFileSync(entryPath, 'utf8'));
+                if (!meta.hasMeta) {
+                    console.log('! ' + entry + ' 没有 METADATA 块');
+                } else if (!meta.parsed) {
+                    console.error('✗ ' + entry + ' 的 METADATA 解析失败');
+                    return 1;
+                }
+                for (const issue of meta.issues) {
+                    console.log('! ' + entry + '：' + issue.tool + ' — ' + issue.reason);
+                }
+            }
         }
         console.log('✓ ' + report.message);
         return 0;
