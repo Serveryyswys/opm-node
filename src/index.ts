@@ -4,11 +4,10 @@
  * 库入口：给想在 Node 里直接调用（不走命令行）的场景。
  */
 
-export { buildProject } from './lib/build';
-export type { BuildOptions, BuildResult } from './lib/build';
+export { runBuild } from './commands/build';
+export type { BuildOptions, BuildReport } from './commands/build';
 export { describeVersions } from './lib/version';
-export { verifyProject } from './lib/verify';
-export type { VerifyReport, VerifyCheck, VerifyStats } from './lib/verify';
+
 export { initProject, OPM_PACKAGE } from './lib/init';
 export type { InitOptions, InitResult } from './lib/init';
 export { auditDependencies, installDependencies } from './lib/dependencies';

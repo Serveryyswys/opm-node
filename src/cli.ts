@@ -19,7 +19,6 @@ import { runBuild } from './commands/build';
 import { auditDependencies, installDependencies } from './lib/dependencies';
 import { describeVersions } from './lib/version';
 import { initProject } from './lib/init';
-import { verifyProject } from './lib/verify';
 
 function ownVersion(): string {
     try {
@@ -86,6 +85,19 @@ function formatBytes(bytes: number): string {
         return (bytes / 1024).toFixed(1) + ' KB';
     }
     return (bytes / 1024 / 1024).toFixed(1) + ' MB';
+}
+
+function readBuildConfig(projectDir: string): Record<string, unknown> | null {
+    const configPath = resolve(projectDir, 'manifest.opmbuild.json');
+    if (!existsSync(configPath)) {
+        return {};
+    }
+    try {
+        const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+        return parsed !== null && typeof parsed === 'object' ? parsed as Record<string, unknown> : null;
+    } catch {
+        return null;
+    }
 }
 
 async function main(argv: string[]): Promise<number> {
@@ -160,18 +172,10 @@ async function main(argv: string[]): Promise<number> {
             }
         }
 
-        const configPath = resolve(projectDir, 'manifest.opmbuild.json');
-        let config: Record<string, unknown> = {};
-        if (existsSync(configPath)) {
-            try {
-                const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
-                if (parsed !== null && typeof parsed === 'object') {
-                    config = parsed as Record<string, unknown>;
-                }
-            } catch (error) {
-                console.error('✗ manifest.opmbuild.json 不是合法 JSON');
-                return 1;
-            }
+        const config = readBuildConfig(projectDir);
+        if (config === null) {
+            console.error('✗ manifest.opmbuild.json 不是合法 JSON');
+            return 1;
         }
 
         const report = await runBuild({
@@ -193,30 +197,36 @@ async function main(argv: string[]): Promise<number> {
 
     if (command === 'verify') {
         const projectDir = resolve(positional[0] === undefined ? process.cwd() : positional[0]);
-        const report = verifyProject({ projectDir, install: !flags.has('no-install'), skipCompile: flags.has('skip-compile') });
-
-        if (flags.has('verbose')) {
-            for (const check of report.checks) {
-                console.log((check.ok ? '✓ ' : '✗ ') + check.name + ' —— ' + check.detail);
-            }
-            const stats = report.stats;
-            console.log('· 归档 ' + stats.archiveFiles + ' 个文件, ' + formatBytes(stats.totalBytes)
-                + '；额外文件 ' + stats.assets + '；依赖 ' + (stats.packages.length === 0 ? '无' : stats.packages.join(', '))
-                + '；node.operit ' + stats.nodeOperitVersion);
-            for (const note of report.notes) {
-                console.log('· ' + note);
-            }
+        const config = readBuildConfig(projectDir);
+        if (config === null) {
+            console.error('✗ manifest.opmbuild.json 不是合法 JSON');
+            return 1;
         }
-        for (const warning of report.warnings) {
-            console.log('! ' + warning);
-        }
+        // verify = build 的前半段：走完全部检查与收集，不落盘。
+        const report = await runBuild({
+            projectDir,
+            dryRun: true,
+            skipCompile: flags.has('skip-compile') || config.skip_compile === true,
+            outName: flags.get('out') !== undefined ? flags.get('out') : (typeof config.out_name === 'string' ? config.out_name : undefined),
+            outDir: flags.get('out-dir') !== undefined ? flags.get('out-dir') : (typeof config.out_dir === 'string' ? config.out_dir : undefined),
+            extraFiles: Array.isArray(config.extra_files) ? config.extra_files as string[] : [],
+            packinfo: (config.PACKINFO !== undefined ? config.PACKINFO : config.packinfo) as never
+        });
         if (!report.ok) {
-            for (const error of report.errors) {
-                console.error('✗ ' + error);
+            console.error('✗ ' + report.message);
+            if (report.violations) {
+                for (const item of report.violations) {
+                    console.error('  ' + item.from + ' -> ' + item.name + '：' + item.reason);
+                }
+            }
+            if (report.missing) {
+                for (const item of report.missing) {
+                    console.error('  ' + (item.from || '') + ' -> ' + item.name + '：' + item.reason);
+                }
             }
             return 1;
         }
-        console.log('✓ 校验通过');
+        console.log('✓ ' + report.message);
         return 0;
     }
 

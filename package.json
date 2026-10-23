@@ -21,7 +21,7 @@
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "node test/run-tests.js",
+    "test": "node test/build.test.js",
     "prepack": "npm run build",
     "package": "node tools/package.js"
   },

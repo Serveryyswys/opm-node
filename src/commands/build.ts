@@ -37,6 +37,8 @@ import { readTextSafeAsync } from '../core/nodesafe';
 export interface BuildOptions {
     /** 项目根目录（Android 侧绝对路径） */
     projectDir: string;
+    /** 只跑检查与收集，不落盘（verify 用） */
+    dryRun?: boolean;
     /** 跳过编译（TS 模式才有效） */
     skipCompile?: boolean;
     /** 编译输出兜底目录（相对项目根，默认 .opm_build）——仅当 tsconfig 未声明 outDir 时用 */
@@ -449,9 +451,23 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
     // 不列举 extra_files；dependencies 由归档里实际收进的 node_modules 包自动推导。
     let packinfoAdded = false;
     if (opts.packinfo && opts.packinfo.enable === true) {
+        // license / author 以 package.json 为准（manifest 里不一定写）
+        const pkgJsonPath = join(projectDir, 'package.json');
+        let pkgLicense: string | undefined;
+        let pkgAuthor: string | undefined;
+        if (existsSync(pkgJsonPath)) {
+            try {
+                const pkgJson = JSON.parse(readFileSync(pkgJsonPath, 'utf8'));
+                if (pkgJson && typeof pkgJson.license === 'string') pkgLicense = pkgJson.license;
+                if (pkgJson && typeof pkgJson.author === 'string') pkgAuthor = pkgJson.author;
+            } catch { /* package.json 坏了就按 manifest */ }
+        }
+        const packinfoOpts = Object.assign({}, opts.packinfo);
+        if (packinfoOpts.license === undefined && pkgLicense !== undefined) packinfoOpts.license = pkgLicense;
+        if (packinfoOpts.author === undefined && pkgAuthor !== undefined) packinfoOpts.author = pkgAuthor;
         const packinfoText = renderPackInfo(
             manifest as Record<string, unknown>,
-            opts.packinfo,
+            packinfoOpts,
             files.keys()
         );
         if (packinfoText !== null) {
@@ -478,6 +494,23 @@ export async function runBuild(opts: BuildOptions): Promise<BuildReport> {
 
     // ---------- 9. 打包 ----------
     await cleanupGlobalShadow(projectDir);
+
+    if (opts.dryRun === true) {
+        // dryRun（verify）：走完 1..8 的全部检查与收集，不写任何文件。
+        // verify 就是 build 的前半段，没必要另写一套。
+        return {
+            ok: true,
+            mode: mode,
+            stage: 'done',
+            message: '校验通过（未写任何文件）：' + files.size + ' 个文件将进归档',
+            fileCount: files.size,
+            bareNames: reached.bareNames,
+            violations: reached.violations,
+            missing: reached.missing,
+            dynamicRequires: reached.dynamicRequires,
+            compileStdout: compileStdout
+        } as BuildReport;
+    }
 
     const pack = await packToolpkg({
         projectDir: projectDir,
