@@ -13,9 +13,10 @@
  * 把最后的报错截掉（node.operit 上踩过这个坑）。
  */
 
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
-import { buildProject } from './lib/build';
+import { runBuild } from './commands/build';
+import { auditDependencies, installDependencies } from './lib/dependencies';
 import { describeVersions } from './lib/version';
 import { initProject } from './lib/init';
 import { verifyProject } from './lib/verify';
@@ -87,7 +88,7 @@ function formatBytes(bytes: number): string {
     return (bytes / 1024 / 1024).toFixed(1) + ' MB';
 }
 
-function main(argv: string[]): number {
+async function main(argv: string[]): Promise<number> {
     const command = argv[0];
     const { positional, flags } = parseArgs(argv.slice(1));
 
@@ -141,33 +142,52 @@ function main(argv: string[]): number {
 
     if (command === 'build') {
         const projectDir = resolve(positional[0] === undefined ? process.cwd() : positional[0]);
-        const result = buildProject({
+
+        // 依赖补齐是 opm-node 在 OPM 之外加的一步：OPM 不装依赖，直接 fail。
+        // 保留它，但只作为前置步骤，构建本身完全走 OPM 的 runBuild。
+        const audit = auditDependencies(projectDir);
+        if (audit.missing.length > 0) {
+            if (flags.has('no-install')) {
+                for (const name of audit.missing) {
+                    console.error('✗ 缺少依赖：' + name);
+                }
+                return 1;
+            }
+            const installed = installDependencies(projectDir);
+            if (!installed.ok) {
+                console.error('✗ npm install 失败');
+                return 1;
+            }
+        }
+
+        const configPath = resolve(projectDir, 'manifest.opmbuild.json');
+        let config: Record<string, unknown> = {};
+        if (existsSync(configPath)) {
+            try {
+                const parsed = JSON.parse(readFileSync(configPath, 'utf8'));
+                if (parsed !== null && typeof parsed === 'object') {
+                    config = parsed as Record<string, unknown>;
+                }
+            } catch (error) {
+                console.error('✗ manifest.opmbuild.json 不是合法 JSON');
+                return 1;
+            }
+        }
+
+        const report = await runBuild({
             projectDir,
-            outName: flags.get('out'),
-            outDir: flags.get('out-dir'),
-            skipCompile: flags.has('skip-compile'),
-            dryRun: flags.has('dry-run'),
-            install: !flags.has('no-install')
+            skipCompile: flags.has('skip-compile') || config.skip_compile === true,
+            outName: flags.get('out') !== undefined ? flags.get('out') : (typeof config.out_name === 'string' ? config.out_name : undefined),
+            outDir: flags.get('out-dir') !== undefined ? flags.get('out-dir') : (typeof config.out_dir === 'string' ? config.out_dir : undefined),
+            extraFiles: Array.isArray(config.extra_files) ? config.extra_files as string[] : [],
+            packinfo: (config.PACKINFO !== undefined ? config.PACKINFO : config.packinfo) as never
         });
 
-        if (!result.ok) {
-            for (const error of result.errors) {
-                console.error('✗ ' + error);
-            }
+        if (!report.ok) {
+            console.error('✗ ' + report.message);
             return 1;
         }
-        if (flags.has('verbose')) {
-            for (const note of result.notes) {
-                console.log('· ' + note);
-            }
-            const byKind = new Map<string, number>();
-            for (const item of result.diagnostics) {
-                byKind.set(item.kind, (byKind.get(item.kind) ?? 0) + 1);
-            }
-            const summary = Array.from(byKind.entries()).map(([kind, count]) => kind + ' ' + count).join(', ');
-            console.log('· 重写 ' + result.diagnostics.length + ' 处（' + summary + '）');
-        }
-        console.log('✓ ' + result.toolpkgPath + '  (' + result.fileCount + ' 个文件, ' + formatBytes(result.totalBytes) + ')');
+        console.log('✓ ' + report.toolpkgPath + '  (' + report.fileCount + ' 个文件)');
         return 0;
     }
 
@@ -217,4 +237,9 @@ function main(argv: string[]): number {
     return 1;
 }
 
-process.exitCode = main(process.argv.slice(2));
+main(process.argv.slice(2)).then((code) => {
+    process.exitCode = code;
+}).catch((error) => {
+    console.error('✗ ' + (error && error.message ? error.message : String(error)));
+    process.exitCode = 1;
+});

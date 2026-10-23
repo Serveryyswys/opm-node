@@ -13,6 +13,7 @@
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { basename, dirname } from 'node:path';
 import { createZip } from '../lib/zip';
 import { ArchiveFile } from './reachability';
 
@@ -47,9 +48,7 @@ function join(a: string, b: string): string {
 }
 
 function baseName(p: string): string {
-    const n = String(p).replace(/\/+$/, '');
-    const i = n.lastIndexOf('/');
-    return i < 0 ? n : n.slice(i + 1);
+    return basename(String(p).replace(/\/+$/, ''));
 }
 
 /**
@@ -69,7 +68,7 @@ export async function packToolpkg(opts: PackOptions): Promise<PackResult> {
     let count = 0;
     for (const [relPath, file] of opts.files) {
         const abs = join(stage, relPath);
-        const parent = abs.slice(0, abs.lastIndexOf('/'));
+        const parent = dirname(abs);
         mkdirSync(parent, { recursive: true });
         // 二进制资源（base64）走 writeBinary，其余走文本 write
         if (file.binary !== undefined) {
@@ -82,7 +81,7 @@ export async function packToolpkg(opts: PackOptions): Promise<PackResult> {
 
     // 4. 压成 .toolpkg（zip，不含顶层目录）
     const name = opts.outName || baseName(opts.projectDir);
-    const parentOfProject = opts.projectDir.replace(/\/+$/, '').replace(/\/[^/]+$/, '');
+    const parentOfProject = dirname(opts.projectDir.replace(/\/+$/, ''));
     const destDir = (opts.outDir && opts.outDir.trim())
         ? opts.outDir.replace(/\/+$/, '')
         : parentOfProject;
