@@ -104,7 +104,8 @@ function assertVersionUnpublished(name, version) {
     fs.rmSync(logPath, { force: true });
 
     var published = result.status === 0 && out.indexOf(version) >= 0;
-    var definitelyMissing = out.indexOf('E404') >= 0;
+    // npm 新版输出 "npm error 404"，旧版是 "E404" —— 两种都认
+    var definitelyMissing = /E?404/.test(out);
     if (published) {
         throw new Error('版本 ' + name + '@' + version + ' 已经在注册表上了。已发布的版本号不能复用，\n' +
             '请先把 package.json 的 version 升上去，再重新打包。');
