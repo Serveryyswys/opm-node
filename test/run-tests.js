@@ -316,6 +316,38 @@ var badCfgResult = lib.buildProject({ projectDir: badCfgProject, install: false 
 ok(!badCfgResult.ok, '构建清单不是合法 JSON 时构建失败');
 ok(badCfgResult.errors.join(' ').indexOf('manifest.opmbuild.json') >= 0, '报错点名是构建清单的问题');
 
+// ---------------------------------------------------------------- 全局检测的词法判定
+
+// process 只出现在注释/字符串/属性访问里 -> 不得注入（否则 process.js 的依赖闭包
+// 几乎等于整个 node.operit）
+var fakeProcessProject = makeProject('fakeprocess', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.fakep', version: '1.0.0', main: 'main.js' }),
+    'main.js': [
+        "// 这里提到 process 但不是引用",
+        "/* Buffer 也一样 */",
+        "var s = 'process and Buffer in a string';",
+        "var o = { process: 1 };",
+        "var p = obj.process;",
+        "module.exports = s + Object.keys(o).length + String(p);"
+    ].join('\n') + "\n"
+});
+var fakeProcessResult = lib.buildProject({ projectDir: fakeProcessProject, install: false });
+ok(fakeProcessResult.ok, '只有注释/字符串里的 process 时构建成功', JSON.stringify(fakeProcessResult.errors).slice(0, 200));
+var fakeNames = lib.readZip(fs.readFileSync(fakeProcessResult.toolpkgPath)).map(function (e) { return e.path; });
+ok(!fakeNames.some(function (n) { return n.indexOf('dist/process.js') >= 0 || n.indexOf('dist/buffer.js') >= 0; }),
+   '不得因注释/字符串误判而注入 process/buffer');
+var fakeMain = lib.readZip(fs.readFileSync(fakeProcessResult.toolpkgPath)).filter(function (e) { return e.path === 'main.js'; })[0].content.toString();
+ok(fakeMain.indexOf('__g.process') < 0, '入口没有注入');
+
+// 真正引用 -> 必须注入
+var realProcessProject = makeProject('realprocess', {
+    'manifest.json': JSON.stringify({ toolpkg_id: 'top.serveryyswys.realp', version: '1.0.0', main: 'main.js' }),
+    'main.js': "exports.registerToolPkg = function () { return process.env.HOME + Buffer.from('x').length; };\n"
+});
+var realProcessResult = lib.buildProject({ projectDir: realProcessProject, install: false });
+var realMain = lib.readZip(fs.readFileSync(realProcessResult.toolpkgPath)).filter(function (e) { return e.path === 'main.js'; })[0].content.toString();
+ok(realMain.indexOf('__g.process') >= 0, '真正引用 process 时注入');
+
 // ---------------------------------------------------------------- verify 的项目结构校验
 
 function verifyFixture(name, manifestObj, files) {

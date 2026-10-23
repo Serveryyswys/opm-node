@@ -14,6 +14,7 @@
 
 import { renderPackInfo } from './packinfo';
 import { scanRequiresAst } from './astscan';
+import { scanGlobalRefs } from './globalscan';
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve, sep as path_sep } from 'node:path';
 import { createZip, ZipEntry } from './zip';
@@ -333,16 +334,13 @@ export function buildProject(options: BuildOptions): BuildResult {
         const neededGlobals: string[] = [];
         const joinedForRequire = toPosix(joinRelative(dirname(entryPath), NODE_OPERIT_DIR));
         const relativeForRequire = joinedForRequire.startsWith('.') ? joinedForRequire : './' + joinedForRequire;
+        // 用 OPM 的词法扫描判定：跳过注释与字符串，排除 .process 与 process:
         for (const name of ['process', 'Buffer']) {
-            let used = false;
             for (const code of rewritten.values()) {
-                if (new RegExp('\\b' + name + '\\b').test(code)) {
-                    used = true;
+                if (scanGlobalRefs(code, [name]).indexOf(name) >= 0) {
+                    neededGlobals.push(name);
                     break;
                 }
-            }
-            if (used) {
-                neededGlobals.push(name);
             }
         }
         if (neededGlobals.length > 0) {
